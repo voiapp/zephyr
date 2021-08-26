@@ -382,6 +382,12 @@ static void gsm_finalize_connection(struct gsm_modem *gsm)
 		return;
 	}
 
+	/* The prodtest firmware wants the nice setup cmds to run, but we do not
+	 * want to actually connect PPP and send a bunch of data. This hack
+	 * ensures we don't.
+	 */
+	return;
+
 	/* Don't initialize PPP until we're attached to packet service */
 	ret = modem_cmd_send_nolock(&gsm->context.iface,
 				    &gsm->context.cmd_handler,
@@ -398,12 +404,6 @@ static void gsm_finalize_connection(struct gsm_modem *gsm)
 
 
 	LOG_DBG("modem setup returned %d, %s", ret, "enable PPP");
-
-	/* The prodtest firmware wants the nice setup cmds to run, but we do not
-	 * want to actually connect PPP and send a bunch of data. This hack
-	 * ensures we don't.
-	 */
-	return;
 
 	ret = modem_cmd_handler_setup_cmds_nolock(&gsm->context.iface,
 						  &gsm->context.cmd_handler,
