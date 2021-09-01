@@ -1,6 +1,11 @@
 #ifndef SPI_NOR_INTERNAL_H_
 #define SPI_NOR_INTERNAL_H_
 
+#include <device.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <sys/types.h>
+
 int spi_nor_wait_until_ready(const struct device *dev);
 void spi_nor_acquire_device(const struct device *dev);
 void spi_nor_release_device(const struct device *dev);
