@@ -115,7 +115,7 @@ struct lwm2m_rd_client_info {
 
 /* buffers */
 static char query_buffer[64]; /* allocate some data for queries and updates */
-static uint8_t client_data[256]; /* allocate some data for the RD */
+static uint8_t client_data[512]; /* allocate some data for the RD */
 
 void engine_update_tx_time(void)
 {
