@@ -1395,20 +1395,7 @@ static int uarte_instance_init(const struct device *dev,
 
 	nrf_gpio_pin_write(config->pseltxd, 1);
 
-	// FIXME: This is a cheap workaround needed because Ninebot made the
-	// Scooter UART multi-drop. We should make it prettier, somehow.
-	if (IS_ENABLED(CONFIG_BOARD_WOLFENSTEIN) &&
-	    config->pseltxd == DT_PROP(DT_NODELABEL(uart1), tx_pin)) {
-		nrf_gpio_cfg(
-			DT_PROP(DT_NODELABEL(uart1), tx_pin),
-			NRF_GPIO_PIN_DIR_OUTPUT,
-			NRF_GPIO_PIN_INPUT_DISCONNECT,
-			NRF_GPIO_PIN_PULLUP,
-			NRF_GPIO_PIN_S0D1,
-			NRF_GPIO_PIN_NOSENSE);
-	} else {
-		nrf_gpio_cfg_output(config->pseltxd);
-	}
+	nrf_gpio_cfg_output(config->pseltxd);
 
 	if (config->pselrxd !=  NRF_UARTE_PSEL_DISCONNECTED) {
 		nrf_gpio_cfg_input(config->pselrxd, NRF_GPIO_PIN_NOPULL);
