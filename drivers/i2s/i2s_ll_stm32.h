@@ -49,6 +49,10 @@
 
 #endif /* CONFIG_I2S_STM32_USE_PLLI2S_ENABLE */
 
+#if defined(CONFIG_SOC_SERIES_STM32H7X)
+#define CLK_SEL_1 LL_RCC_SPI123_CLKSOURCE_PLL1Q
+#endif
+
 struct queue_item {
 	void *mem_block;
 	size_t size;
