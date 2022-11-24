@@ -5,8 +5,7 @@
  */
 
 #define LOG_MODULE_NAME net_lwm2m_obj_swmgmt
-#define LOG_LEVEL CONFIG_LWM2MM_LOG_LEVEL_DBG
-
+#define LOG_LEVEL CONFIG_LWM2M_LOG_LEVEL_DBG
 #include <logging/log.h>
 LOG_MODULE_REGISTER(LOG_MODULE_NAME);
 
