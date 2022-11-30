@@ -158,7 +158,7 @@ int fs_open(struct fs_file_t *zfp, const char *file_name, fs_mode_t flags)
 	rc = zfp->mp->fs->open(zfp, file_name, flags);
 	if (rc < 0) {
 		LOG_ERR("file open error (%d)", rc);
-		return rc;
+		zfp->mp = NULL;
 	}
 
 	return rc;
@@ -179,7 +179,6 @@ int fs_close(struct fs_file_t *zfp)
 	rc = zfp->mp->fs->close(zfp);
 	if (rc < 0) {
 		LOG_ERR("file close error (%d)", rc);
-		return rc;
 	}
 
 	zfp->mp = NULL;
