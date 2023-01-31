@@ -20,8 +20,8 @@ static enum net_verdict pap_handle(struct ppp_context *ctx,
 
 static struct net_pkt *pap_config_info_add(struct ppp_fsm *fsm)
 {
-	uint8_t payload[] = { 5, 'b', 'l', 'a', 'n', 'k',
-			      5, 'b', 'l', 'a', 'n', 'k' };
+	uint8_t payload[] = { 5, 'g', 'd', 'a', 't', 'a',
+			      5, 'g', 'd', 'a', 't', 'a' };
 	struct net_pkt *pkt;
 
 	pkt = net_pkt_alloc_with_buffer(ppp_fsm_iface(fsm), sizeof(payload),
