@@ -591,8 +591,9 @@ registering:
 					DLCI_AT, gsm->at_dev->name);
 			}
 		}
-		modem_cmd_handler_tx_unlock(&gsm->context.cmd_handler);
 	}
+
+	modem_cmd_handler_tx_unlock(&gsm->context.cmd_handler);
 }
 
 static int mux_enable(struct gsm_modem *gsm)
