@@ -808,7 +808,7 @@ attaching:
 
 	LOG_DBG("modem setup returned %d, %s", ret, "enable PPP");
 
-#if defined(CONFIG_BOARD_WOLFENSTEIN) || defined(CONFIG_BOARD_DOOM)
+#if defined(CONFIG_MODEM_GSM_QUECTEL)
 	/* For Quectel, dump the network info (LTE/WCDMA/etc) for debugging */
 	(void)modem_cmd_send_nolock(&gsm->context.iface,
 				    &gsm->context.cmd_handler, NULL, 0,
@@ -820,12 +820,12 @@ attaching:
 					    "AT+CGACT=1,1", &gsm->sem_response,
 					    K_SECONDS(2));
 	}
+#endif
 	/* Grab the current time from the modem. */
 	(void)modem_cmd_send_nolock(
 		&gsm->context.iface, &gsm->context.cmd_handler,
 		&cclk_cmd, 1, "AT+CCLK?", &gsm->sem_response,
 		K_SECONDS(2));
-#endif
 
 	ret = modem_cmd_handler_setup_cmds_nolock(&gsm->context.iface,
 						  &gsm->context.cmd_handler,
