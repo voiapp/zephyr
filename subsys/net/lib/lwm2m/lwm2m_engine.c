@@ -513,11 +513,11 @@ static int engine_add_observer(struct lwm2m_message *msg,
 	sys_slist_append(&msg->ctx->observer,
 			 &observe_node_data[i].node);
 
-	LOG_DBG("OBSERVER ADDED %u/%u/%u(%u) token:'%s' addr:%s",
+	LOG_DBG("OBSERVER ADDED %u/%u/%u(%u) token:'%s' addr:%s number:%d",
 		msg->path.obj_id, msg->path.obj_inst_id,
 		msg->path.res_id, msg->path.level,
 		log_strdup(sprint_token(token, tkl)),
-		log_strdup(lwm2m_sprint_ip_addr(&msg->ctx->remote_addr)));
+		log_strdup(lwm2m_sprint_ip_addr(&msg->ctx->remote_addr)), i);
 
 	if (msg->ctx->observe_cb) {
 		msg->ctx->observe_cb(LWM2M_OBSERVE_EVENT_OBSERVER_ADDED, &msg->path, NULL);
