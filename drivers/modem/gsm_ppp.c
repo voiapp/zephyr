@@ -39,6 +39,7 @@ LOG_MODULE_REGISTER(modem_gsm, CONFIG_MODEM_LOG_LEVEL);
 #define GSM_RSSI_RETRY_DELAY_MSEC       2000
 #define GSM_RSSI_RETRIES                10
 #define GSM_RSSI_INVALID                -1000
+#define GSM_APN_MAX_LEN                 50
 
 #if defined(CONFIG_MODEM_GSM_ENABLE_CESQ_RSSI)
 	#define GSM_RSSI_MAXVAL          0
@@ -99,6 +100,8 @@ static struct gsm_modem {
 
 	gsm_modem_power_cb modem_on_cb;
 	gsm_modem_power_cb modem_off_cb;
+
+	char *apn;
 } gsm;
 
 NET_BUF_POOL_DEFINE(gsm_recv_pool, GSM_RECV_MAX_BUF, GSM_RECV_BUF_SIZE,
@@ -657,10 +660,13 @@ static void rssi_handler(struct k_work *work)
 }
 
 int __weak gsm_ppp_application_pre_setup(struct modem_context *context,
-					  struct k_sem *sem)
+					  struct k_sem *sem, char **apn)
 {
 	ARG_UNUSED(context);
 	ARG_UNUSED(sem);
+	/* Filling in the APN here will overwrite the CONFIG_MODEM_GSM_APN.
+	Max length of APN is GSM_APN_MAX_LEN */
+	ARG_UNUSED(apn);
 
 	return 0;
 }
@@ -746,10 +752,18 @@ static void gsm_finalize_connection(struct gsm_modem *gsm)
 	gsm_ppp_application_setup(&gsm->context, &gsm->sem_response);
 
 	/* Finalize PDP context */
+	char apn_cmd[GSM_APN_MAX_LEN + 20] = "AT+CGDCONT=1,\"IP\",\"";
+	if (gsm->apn == NULL) {
+		strcat(apn_cmd, CONFIG_MODEM_GSM_APN);
+	}
+	else {
+		strcat(apn_cmd, gsm->apn);
+	}
+	strcat(apn_cmd, "\"");
+
 	(void)modem_cmd_send_nolock(
 		&gsm->context.iface, &gsm->context.cmd_handler, NULL, 0,
-		"AT+CGDCONT=1,\"IP\",\"" CONFIG_MODEM_GSM_APN "\"",
-		&gsm->sem_response, GSM_CMD_SETUP_TIMEOUT);
+		apn_cmd, &gsm->sem_response, GSM_CMD_SETUP_TIMEOUT);
 
 attaching:
 	/* Don't initialize PPP until we're attached to packet service */
@@ -1078,7 +1092,8 @@ static void gsm_configure(struct k_work *work)
 
 	LOG_DBG("Starting modem %p configuration", gsm);
 
-	ret = gsm_ppp_application_pre_setup(&gsm->context, &gsm->sem_response);
+	gsm->apn = NULL;
+	ret = gsm_ppp_application_pre_setup(&gsm->context, &gsm->sem_response, &gsm->apn);
 	if (ret < 0) {
 		LOG_WRN("GSM PPP pre-setup failed %d.", ret);
 		(void)gsm_work_reschedule(&gsm->gsm_configure_work, K_NO_WAIT);

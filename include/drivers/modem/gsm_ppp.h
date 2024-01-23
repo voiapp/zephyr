@@ -53,6 +53,13 @@ void gsm_ppp_stop(const struct device *dev);
 /** @endcond */
 
 /**
+ * @brief Request a modem soft reset on gsm_ppp_stop
+ * 
+ * @param dev gsm modem device
+ */
+void gsm_ppp_request_soft_reset(const struct device *dev);
+
+/**
  * @brief Register functions callbacks for power modem on/off.
  *
  * @param dev: gsm modem device
