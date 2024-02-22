@@ -660,22 +660,23 @@ static void rssi_handler(struct k_work *work)
 }
 
 int __weak gsm_ppp_application_pre_setup(struct modem_context *context,
-					  struct k_sem *sem, char **apn)
+					  struct k_sem *sem)
 {
 	ARG_UNUSED(context);
 	ARG_UNUSED(sem);
-	/* Filling in the APN here will overwrite the CONFIG_MODEM_GSM_APN.
-	Max length of APN is GSM_APN_MAX_LEN */
-	ARG_UNUSED(apn);
 
 	return 0;
 }
 
 void __weak gsm_ppp_application_setup(struct modem_context *context,
-				      struct k_sem *sem)
+				      struct k_sem *sem, const char* iccid, char **apn)
 {
 	ARG_UNUSED(context);
 	ARG_UNUSED(sem);
+	ARG_UNUSED(iccid);
+	/* Filling in the APN here will overwrite the CONFIG_MODEM_GSM_APN.
+	Max length of APN is GSM_APN_MAX_LEN */
+	ARG_UNUSED(apn);
 }
 
 static void gsm_finalize_connection(struct gsm_modem *gsm)
@@ -749,7 +750,9 @@ static void gsm_finalize_connection(struct gsm_modem *gsm)
 		return;
 	}
 
-	gsm_ppp_application_setup(&gsm->context, &gsm->sem_response);
+	gsm->apn = NULL;
+	gsm_ppp_application_setup(&gsm->context, &gsm->sem_response,
+	  (const char *)&gsm->minfo.mdm_iccid, &gsm->apn);
 
 	/* Finalize PDP context */
 	char apn_cmd[GSM_APN_MAX_LEN + 20] = "AT+CGDCONT=1,\"IP\",\"";
@@ -1092,8 +1095,7 @@ static void gsm_configure(struct k_work *work)
 
 	LOG_DBG("Starting modem %p configuration", gsm);
 
-	gsm->apn = NULL;
-	ret = gsm_ppp_application_pre_setup(&gsm->context, &gsm->sem_response, &gsm->apn);
+	ret = gsm_ppp_application_pre_setup(&gsm->context, &gsm->sem_response);
 	if (ret < 0) {
 		LOG_WRN("GSM PPP pre-setup failed %d.", ret);
 		(void)gsm_work_reschedule(&gsm->gsm_configure_work, K_NO_WAIT);

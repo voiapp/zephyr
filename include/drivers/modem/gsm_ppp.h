@@ -40,9 +40,11 @@ struct k_sem;
  *
  * @param context pointer to modem info
  * @param sem_response semaphore to be passed to modem_cmd_send
+ * @param iccid pointer to ICCID string
+ * @param apn pointer to the apn string to be filled
  */
 void gsm_ppp_application_setup(struct modem_context *context,
-			       struct k_sem *sem_response);
+			       struct k_sem *sem_response, const char* iccid, char ** apn);
 
 /** @cond INTERNAL_HIDDEN */
 struct device;
