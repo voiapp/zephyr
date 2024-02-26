@@ -1197,6 +1197,10 @@ static void gsm_soft_reset(struct gsm_modem *gsm)
 			}
 		}
 
+		if (retry == 0){
+			LOG_ERR("Modem didn't answer to CFUN=0");
+		}
+
 		k_sleep(K_SECONDS(10));
 
 		retry = 10;
@@ -1212,6 +1216,10 @@ static void gsm_soft_reset(struct gsm_modem *gsm)
 			if(ret == 0) {
 				break;
 			}
+		}
+
+		if (retry == 0){
+			LOG_ERR("Modem didn't answer to CFUN=1,1");
 		}
 		k_sleep(K_SECONDS(15));
 
