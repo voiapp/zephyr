@@ -895,6 +895,13 @@ static int mux_enable(struct gsm_modem *gsm)
 {
 	int ret;
 
+	(void)modem_cmd_send_nolock(&gsm->context.iface, &gsm->context.cmd_handler,
+				    &response_cmds[0], ARRAY_SIZE(response_cmds), "AT+CMUX=?",
+				    &gsm->sem_response, GSM_CMD_AT_TIMEOUT);
+	(void)modem_cmd_send_nolock(&gsm->context.iface, &gsm->context.cmd_handler,
+				    &response_cmds[0], ARRAY_SIZE(response_cmds), "AT+CMUX?",
+				    &gsm->sem_response, GSM_CMD_AT_TIMEOUT);
+
 	/* Turn on muxing */
 	if (IS_ENABLED(CONFIG_MODEM_GSM_SIMCOM)) {
 		ret = modem_cmd_send_nolock(
