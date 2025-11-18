@@ -88,6 +88,7 @@ zephyr_library_sources_ifdef(CONFIG_SPI_FLASH_AT25XV021A spi_flash_at25xv021a.c)
 zephyr_library_sources_ifdef(CONFIG_SPI_FLASH_AT45 spi_flash_at45.c)
 zephyr_library_sources_ifdef(CONFIG_SPI_NAND spi_nand.c)
 zephyr_library_sources_ifdef(CONFIG_SPI_NOR spi_nor.c)
+zephyr_library_sources_ifdef(CONFIG_SPI_NOR_EXTRAS_GD25Q64C spi_nor_gd25q64c.c)
 # zephyr-keep-sorted-stop
 
 if(CONFIG_SOC_FAMILY_INFINEON_EDGE)
