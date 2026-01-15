@@ -3,3 +3,9 @@ description: Artery AT32F435 non-volatile flash memory
 compatible: "artery,f435-nv-flash"
 
 include: soc-nv-flash.yaml
+
+properties:
+    max-erase-time:
+     type: int
+     description: max erase time(millisecond) of a flash sector or page or half-page
+     required: true

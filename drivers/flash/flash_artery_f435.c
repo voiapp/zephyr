@@ -13,7 +13,9 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/irq.h>
+#include <zephyr/arch/cpu.h>
 #include <errno.h>
+#include <string.h>
 
 LOG_MODULE_REGISTER(flash_artery_f435, CONFIG_FLASH_LOG_LEVEL);
 
@@ -87,13 +89,11 @@ static bool is_bank2_addr(uint32_t addr)
 	return (addr >= FLASH_BANK2_START && addr <= FLASH_BANK2_END);
 }
 
-static int flash_wait_ready(const struct device *dev, uint32_t timeout_ms)
+static int flash_wait_ready(const struct device *dev, uint32_t addr, uint32_t timeout_ms)
 {
-	uint32_t sts_offset = FLASH_STS_OFFSET;
+	/* Select correct status register based on address */
+	uint32_t sts_offset = is_bank2_addr(addr) ? FLASH_STS2_OFFSET : FLASH_STS_OFFSET;
 	uint32_t start = k_uptime_get_32();
-
-	/* Check if we need to use bank2 status register */
-	/* For simplicity, we check bank1 status which covers most cases */
 
 	while (k_uptime_get_32() - start < timeout_ms) {
 		uint32_t sts = flash_read_reg(dev, sts_offset);
@@ -101,13 +101,13 @@ static int flash_wait_ready(const struct device *dev, uint32_t timeout_ms)
 		if (!(sts & FLASH_STS_OBF)) {
 			/* Check for errors */
 			if (sts & FLASH_STS_PRGMERR) {
-				LOG_ERR("Flash program error");
+				LOG_ERR("Flash program error at 0x%08x", addr);
 				/* Clear error flag */
 				flash_write_reg(dev, sts_offset, FLASH_STS_PRGMERR);
 				return -EIO;
 			}
 			if (sts & FLASH_STS_EPPERR) {
-				LOG_ERR("Flash erase/program protection error");
+				LOG_ERR("Flash erase/program protection error at 0x%08x", addr);
 				/* Clear error flag */
 				flash_write_reg(dev, sts_offset, FLASH_STS_EPPERR);
 				return -EACCES;
@@ -117,7 +117,7 @@ static int flash_wait_ready(const struct device *dev, uint32_t timeout_ms)
 		k_busy_wait(100);
 	}
 
-	LOG_ERR("Flash operation timeout");
+	LOG_ERR("Flash operation timeout at 0x%08x", addr);
 	return -ETIMEDOUT;
 }
 
@@ -155,28 +155,34 @@ static __ramfunc int flash_erase_sector_ramfunc(const struct device *dev, uint32
 {
 	uint32_t ctrl_offset = is_bank2_addr(addr) ? FLASH_CTRL2_OFFSET : FLASH_CTRL_OFFSET;
 	uint32_t addr_offset = is_bank2_addr(addr) ? FLASH_ADDR2_OFFSET : FLASH_ADDR_OFFSET;
+	uint32_t sts_offset = is_bank2_addr(addr) ? FLASH_STS2_OFFSET : FLASH_STS_OFFSET;
 	uint32_t ctrl;
 	int ret;
 
+	/* Clear any previous error flags */
+	flash_write_reg(dev, sts_offset, FLASH_STS_PRGMERR | FLASH_STS_EPPERR);
+
 	/* Wait for flash to be ready */
-	ret = flash_wait_ready(dev, FLASH_TIMEOUT_MS);
+	ret = flash_wait_ready(dev, addr, FLASH_TIMEOUT_MS);
 	if (ret < 0) {
 		return ret;
 	}
 
-	/* Set sector erase mode and write address */
-	flash_write_reg(dev, addr_offset, addr);
-
+	/* Set sector erase mode */
 	ctrl = flash_read_reg(dev, ctrl_offset);
 	ctrl |= FLASH_CTRL_SECERS;
 	flash_write_reg(dev, ctrl_offset, ctrl);
 
+	/* Write address */
+	flash_write_reg(dev, addr_offset, addr);
+
 	/* Start erase */
+	ctrl = flash_read_reg(dev, ctrl_offset);
 	ctrl |= FLASH_CTRL_ERSTR;
 	flash_write_reg(dev, ctrl_offset, ctrl);
 
 	/* Wait for completion */
-	ret = flash_wait_ready(dev, FLASH_TIMEOUT_MS);
+	ret = flash_wait_ready(dev, addr, FLASH_TIMEOUT_MS);
 
 	/* Clear sector erase bit */
 	ctrl = flash_read_reg(dev, ctrl_offset);
@@ -193,12 +199,16 @@ static __ramfunc int flash_program_word_ramfunc(const struct device *dev, uint32
 						 uint32_t data)
 {
 	uint32_t ctrl_offset = is_bank2_addr(addr) ? FLASH_CTRL2_OFFSET : FLASH_CTRL_OFFSET;
+	uint32_t sts_offset = is_bank2_addr(addr) ? FLASH_STS2_OFFSET : FLASH_STS_OFFSET;
 	uint32_t ctrl;
 	int ret;
 	volatile uint32_t *flash_ptr = (volatile uint32_t *)addr;
 
+	/* Clear any previous error flags */
+	flash_write_reg(dev, sts_offset, FLASH_STS_PRGMERR | FLASH_STS_EPPERR);
+
 	/* Wait for flash to be ready */
-	ret = flash_wait_ready(dev, FLASH_TIMEOUT_MS);
+	ret = flash_wait_ready(dev, addr, FLASH_TIMEOUT_MS);
 	if (ret < 0) {
 		return ret;
 	}
@@ -212,7 +222,7 @@ static __ramfunc int flash_program_word_ramfunc(const struct device *dev, uint32
 	*flash_ptr = data;
 
 	/* Wait for completion */
-	ret = flash_wait_ready(dev, FLASH_TIMEOUT_MS);
+	ret = flash_wait_ready(dev, addr, FLASH_TIMEOUT_MS);
 
 	/* Disable programming */
 	ctrl = flash_read_reg(dev, ctrl_offset);
@@ -227,7 +237,6 @@ static int flash_artery_f435_read(const struct device *dev, off_t offset,
 {
 	const struct flash_artery_f435_config *cfg = dev->config;
 	struct flash_artery_f435_data *dev_data = dev->data;
-	uint8_t *dest = (uint8_t *)data;
 	uint32_t flash_addr;
 
 	if (!data) {
@@ -244,10 +253,8 @@ static int flash_artery_f435_read(const struct device *dev, off_t offset,
 
 	flash_addr = FLASH_BANK1_START + offset;
 
-	/* Direct memory read */
-	for (size_t i = 0; i < len; i++) {
-		dest[i] = *((volatile uint8_t *)(flash_addr + i));
-	}
+	/* Direct memory-mapped read - flash is accessible via AHB bus */
+	memcpy(data, (const void *)flash_addr, len);
 
 	k_sem_give(&dev_data->sem);
 
@@ -445,7 +452,7 @@ static struct flash_artery_f435_data flash_artery_f435_data_0;
 
 static const struct flash_artery_f435_config flash_artery_f435_config_0 = {
 	.base_addr = DT_INST_REG_ADDR(0),
-	.flash_size = DT_REG_SIZE(DT_INST_CHILD(0, flash_0)),
+	.flash_size = DT_REG_SIZE(DT_NODELABEL(flash0)),
 };
 
 DEVICE_DT_INST_DEFINE(0, flash_artery_f435_init, NULL,
