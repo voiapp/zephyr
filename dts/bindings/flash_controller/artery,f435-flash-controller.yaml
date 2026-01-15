@@ -1,0 +1,5 @@
+description: Artery AT32F435 flash controller
+
+compatible: "artery,f435-flash-controller"
+
+include: flash-controller.yaml

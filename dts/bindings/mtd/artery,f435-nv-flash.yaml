@@ -1,0 +1,5 @@
+description: Artery AT32F435 non-volatile flash memory
+
+compatible: "artery,f435-nv-flash"
+
+include: soc-nv-flash.yaml

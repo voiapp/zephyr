@@ -1,0 +1,17 @@
+# Artery AT32F435 internal flash configuration
+
+# Copyright (c) 2026 Voi Technology AB
+# SPDX-License-Identifier: Apache-2.0
+
+config SOC_FLASH_ARTERY_F435
+	bool "Artery AT32F435 internal flash driver"
+	default y
+	depends on DT_HAS_ARTERY_F435_FLASH_CONTROLLER_ENABLED
+	select FLASH_HAS_DRIVER_ENABLED
+	select FLASH_HAS_PAGE_LAYOUT
+	select FLASH_HAS_EXPLICIT_ERASE
+	help
+	  Enable the internal flash driver for Artery AT32F435 microcontrollers.
+	  This driver provides erase, write, and read operations for the on-chip
+	  flash memory. The AT32F435 features two flash banks with 4 KiB sector
+	  erase granularity and 32-bit write alignment.
