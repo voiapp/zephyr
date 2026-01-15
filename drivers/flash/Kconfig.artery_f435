@@ -5,7 +5,6 @@
 
 config SOC_FLASH_ARTERY_F435
 	bool "Artery AT32F435 internal flash driver"
-	default y
 	depends on DT_HAS_ARTERY_F435_FLASH_CONTROLLER_ENABLED
 	select FLASH_HAS_DRIVER_ENABLED
 	select FLASH_HAS_PAGE_LAYOUT

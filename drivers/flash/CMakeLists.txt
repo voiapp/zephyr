@@ -89,6 +89,7 @@ zephyr_library_sources_ifdef(CONFIG_SPI_NOR_EXTRAS_GD25Q64C spi_nor_gd25q64c.c)
 
 # Artery AT32F435 internal flash driver
 zephyr_library_sources_ifdef(CONFIG_DT_HAS_ARTERY_F435_FLASH_CONTROLLER_ENABLED flash_artery_f435.c)
+zephyr_library_sources_ifdef(CONFIG_FLASH_ARTERY_F435_QSPI flash_artery_f435_qspi.c)
 
 if(CONFIG_FLASH_SIMULATOR)
   zephyr_library_sources(flash_simulator.c)

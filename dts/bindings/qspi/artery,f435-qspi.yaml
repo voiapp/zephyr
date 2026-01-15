@@ -1,0 +1,64 @@
+# Copyright (c) 2026
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+    Artery AT32F435 QSPI Controller.
+
+    An AT32F435 quadspi node would typically look like this:
+
+        &quadspi {
+            pinctrl-0 = <&quadspi_bk1_clk_pb1 &quadspi_bk1_ncs_pb10
+                         &quadspi_bk1_io0_pa6 &quadspi_bk1_io1_pa7
+                         &quadspi_bk1_io2_pc4 &quadspi_bk1_io3_pc5>;
+            pinctrl-names = "default";
+            status = "okay";
+        };
+
+compatible: "artery,f435-qspi"
+
+include: [base.yaml, pinctrl-device.yaml]
+
+bus: qspi
+
+properties:
+  reg:
+    required: true
+
+  interrupts:
+    required: false
+
+  clocks:
+    required: true
+
+  pinctrl-0:
+    required: true
+
+  pinctrl-names:
+    required: true
+
+  dmas:
+    description: |
+      Optional DMA channel specifier. If DMA should be used, specifier should
+      hold a phandle reference to the dma controller, the channel number,
+      the slot number, channel configuration and finally features.
+
+      For example dmas for TX/RX on QSPI
+         dmas = <&dma1 5 5 0x0000 0x03>;
+
+  dma-names:
+    description: |
+      DMA channel name. If DMA should be used, expected value is "tx_rx".
+
+      For example
+         dma-names = "tx_rx";
+
+  flash-id:
+    type: int
+    required: false
+    description: |
+      Flash ID number. This number, if defined, helps to select the right
+      QSPI GPIO banks (defined as 'quadspi_bk[12]' in pinctrl property)
+      to communicate with flash memory.
+
+      For example
+         flash-id = <2>;

@@ -1,0 +1,46 @@
+# Copyright (c) 2026
+# SPDX-License-Identifier: Apache-2.0
+
+description: |
+    Artery AT32F435 QSPI Flash controller supporting the JEDEC CFI interface
+
+    Representation of a serial flash on a quadspi bus:
+
+        external_flash: w25q512jveiq@0 {
+                compatible = "artery,f435-qspi-nor";
+                reg = <0>;
+                size = <DT_SIZE_M(512)>; /* 512 Mbits */
+                qspi-max-frequency = <50000000>;
+                jedec-id = [ef 40 20];
+                spi-bus-width = <4>;
+                status = "okay";
+        };
+
+compatible: "artery,f435-qspi-nor"
+
+include: ["flash-controller.yaml", "jedec,jesd216.yaml"]
+
+on-bus: qspi
+
+properties:
+  size:
+    required: true
+    description: Flash Memory size in bits (following Zephyr QSPI NOR convention)
+  reg:
+    required: true
+    description: Chip select number (typically 0)
+  qspi-max-frequency:
+    type: int
+    required: true
+    description: Maximum clock frequency of device's QSPI interface in Hz
+  reset-gpios:
+    type: phandle-array
+    description: RESETn pin
+  reset-gpios-duration:
+    type: int
+    description: The duration (in ms) for the flash memory reset pulse
+  spi-bus-width:
+    type: int
+    description: |
+      The width of (Q)SPI bus to which flash memory is connected.
+      Typical value is 4 (when using SIO[0123] for quad mode).

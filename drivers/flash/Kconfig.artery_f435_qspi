@@ -1,0 +1,15 @@
+# Copyright (c) 2026
+# SPDX-License-Identifier: Apache-2.0
+
+config FLASH_ARTERY_F435_QSPI
+	bool "Artery AT32F435 QSPI NOR flash driver"
+	depends on DT_HAS_ARTERY_F435_QSPI_NOR_ENABLED
+	select FLASH_HAS_DRIVER_ENABLED
+	select FLASH_HAS_PAGE_LAYOUT
+	select FLASH_JESD216
+	help
+	  Enable the Artery AT32F435 QSPI NOR flash driver.
+
+	  This driver provides support for external QSPI NOR flash memory
+	  connected to the AT32F435 QSPI peripheral. It uses JESD216/SFDP
+	  for automatic flash geometry detection and supports quad I/O mode.
