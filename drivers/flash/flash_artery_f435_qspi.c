@@ -41,22 +41,23 @@ LOG_MODULE_REGISTER(flash_artery_f435_qspi, CONFIG_FLASH_LOG_LEVEL);
 /* AT32F435 QSPI Controller base (get from parent node) */
 #define QSPI_CONTROLLER_NODE DT_INST_PARENT(0)
 
-/* W25Q512JV-specific commands (per datasheet) */
-#define W25Q_CMD_READ_SR2               0x35  /* Read Status Register-2 */
-#define W25Q_CMD_READ_SR3               0x15  /* Read Status Register-3 */
-#define W25Q_CMD_WRITE_SR2              0x31  /* Write Status Register-2 */
-#define W25Q_CMD_WRITE_SR3              0x11  /* Write Status Register-3 */
-#define W25Q_CMD_ENTER_4B_ADDR          0xB7  /* Enter 4-byte address mode */
-#define W25Q_CMD_EXIT_4B_ADDR           0xE9  /* Exit 4-byte address mode */
-#define W25Q_CMD_READ_EAR               0xC8  /* Read Extended Address Register */
-#define W25Q_CMD_WRITE_EAR              0xC5  /* Write Extended Address Register */
-#define W25Q_CMD_SET_READ_PARAMS        0xC0  /* Set Read Parameters (dummy cycles) */
-#define W25Q_CMD_SET_BURST_WRAP         0x77  /* Set Burst with Wrap */
-#define W25Q_CMD_ENABLE_RESET           0x66  /* Enable Reset */
-#define W25Q_CMD_RESET_DEVICE           0x99  /* Reset Device */
-#define W25Q_CMD_GLOBAL_BLOCK_UNLOCK    0x98  /* Global Block/Sector Unlock */
-#define W25Q_CMD_INDIVIDUAL_UNLOCK      0x39  /* Individual Block/Sector Unlock */
-#define W25Q_CMD_READ_BLOCK_LOCK        0x3D  /* Read Block/Sector Lock Status */
+/* Generic NOR flash commands (JESD216 compatible) */
+#define CMD_READ_SR2                    0x35  /* Read Status Register-2 (common) */
+#define CMD_READ_SR3                    0x15  /* Read Status Register-3 (Winbond/others) */
+#define CMD_WRITE_SR2                   0x31  /* Write Status Register-2 */
+#define CMD_FAST_READ                   0x0B  /* Fast Read (1-1-1) */
+#define CMD_FAST_READ_DUAL_OUT          0x3B  /* Fast Read Dual Output (1-1-2) */
+#define CMD_FAST_READ_QUAD_OUT          0x6B  /* Fast Read Quad Output (1-1-4) */
+#define CMD_QUAD_PAGE_PROGRAM           0x32  /* Quad Input Page Program */
+#define CMD_ENTER_4B_ADDR               0xB7  /* Enter 4-byte address mode */
+#define CMD_EXIT_4B_ADDR                0xE9  /* Exit 4-byte address mode */
+#define CMD_ENABLE_RESET                0x66  /* Enable Reset */
+#define CMD_RESET_DEVICE                0x99  /* Reset Device */
+
+/* Common erase commands (JESD216 typical) */
+#define CMD_ERASE_4K                    0x20  /* 4 KiB Sector Erase */
+#define CMD_ERASE_32K                   0x52  /* 32 KiB Block Erase */
+#define CMD_ERASE_64K                   0xD8  /* 64 KiB Block Erase */
 
 /* W25Q512JV Status Register bits */
 #define W25Q_SR1_BUSY                   BIT(0)  /* Busy flag (S0) */
@@ -147,9 +148,9 @@ LOG_MODULE_REGISTER(flash_artery_f435_qspi, CONFIG_FLASH_LOG_LEVEL);
 /* Operation modes (for OPMODE field) */
 #define QSPI_OPMODE_111         0x0  /* 1-1-1 (standard SPI) */
 #define QSPI_OPMODE_112         0x1  /* 1-1-2 (dual output) */
-#define QSPI_OPMODE_114         0x2  /* 1-1-4 (quad output) */
+#define QSPI_OPMODE_114         0x2  /* 1-1-4 (quad output) - use for 0x6B */
 #define QSPI_OPMODE_122         0x3  /* 1-2-2 (dual I/O) */
-#define QSPI_OPMODE_144         0x4  /* 1-4-4 (quad I/O) */
+#define QSPI_OPMODE_144         0x4  /* 1-4-4 (quad I/O) - avoid for W25Q512 */
 
 /* Address length values */
 #define QSPI_ADRLEN_0_BYTE      0x0
@@ -184,20 +185,49 @@ struct flash_artery_f435_qspi_config {
 	const struct pinctrl_dev_config *pcfg;
 	uint32_t max_frequency;
 	size_t flash_size;
+	
+	/* DTS overrides for quirky parts */
+	uint8_t override_addr_bytes;     /* 0=auto, 3/4=force */
+	uint8_t override_read_opcode;    /* 0=auto */
+	uint8_t override_read_dummy;     /* 0=auto */
+	bool disable_sfdp;               /* Skip SFDP entirely */
+};
+
+/* Runtime capability structure for model-agnostic operation */
+struct flash_capabilities {
+	/* Read capabilities */
+	uint8_t read_opcode;
+	uint8_t read_opmode;
+	uint8_t read_dummy_cycles;
+	
+	/* Program capabilities */
+	uint8_t prog_opcode;
+	uint8_t prog_opmode;
+	
+	/* Erase capabilities (from SFDP or fallback) */
+	struct jesd216_erase_type erase_types[JESD216_NUM_ERASE_TYPES];
+	
+	/* Addressing */
+	uint8_t addr_bytes;  /* 3 or 4 */
+	
+	/* Status polling */
+	uint8_t busy_opcode;
+	uint8_t busy_bit;
+	
+	/* Flags */
+	bool quad_enabled : 1;
+	bool supports_4b_opcodes : 1;
+	bool in_4b_mode : 1;
+	bool reset_supported : 1;
 };
 
 struct flash_artery_f435_qspi_data {
 	struct k_sem sem;
-	struct k_sem sync;
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
 	struct flash_pages_layout layout;
 #endif
-	struct jesd216_erase_type erase_types[JESD216_NUM_ERASE_TYPES];
+	struct flash_capabilities caps;
 	uint16_t page_size;
-	uint8_t qspi_read_cmd;
-	uint8_t qspi_read_cmd_latency;
-	bool flag_access_32bit : 1;
-	bool flag_quad_io_en : 1;
 };
 
 /* Helper macros for register access */
@@ -312,19 +342,17 @@ static int qspi_wait_cmd_complete(const struct flash_artery_f435_qspi_config *cf
 	return 0;
 }
 
-/* Wait for FIFO ready (write) */
-static int qspi_wait_tx_fifo_ready(const struct flash_artery_f435_qspi_config *cfg,
-				    uint32_t timeout_ms)
+/* Generic FIFO wait helper */
+static int qspi_wait_fifo(const struct flash_artery_f435_qspi_config *cfg,
+			  uint32_t fifo_bit, uint32_t timeout_ms)
 {
 	uint32_t start = k_uptime_get_32();
-
-	while (!(qspi_read_reg(cfg, QSPI_FIFOSTS_OFFSET) & QSPI_FIFOSTS_TXFIFORDY)) {
+	while (!(qspi_read_reg(cfg, QSPI_FIFOSTS_OFFSET) & fifo_bit)) {
 		if (k_uptime_get_32() - start > timeout_ms) {
 			return -ETIMEDOUT;
 		}
 		k_yield();
 	}
-
 	return 0;
 }
 
@@ -339,180 +367,145 @@ static int qspi_exec_cmd(const struct flash_artery_f435_qspi_config *cfg,
 {
 	uint32_t cmd_w1 = 0;
 	uint32_t cmd_w3 = 0;
-	uint32_t ctrl;
 
 	LOG_DBG(">>> QSPI cmd: inst=0x%02x addr=0x%08x alen=%u dummy=%u mode=%u dcnt=%u wden=%d rst=%d",
 		instruction, address, addr_len, dummy_cycles, opmode, data_count, write_data_enable, read_status);
 
-	/* CRITICAL: Reset command engine before every command
-	 * Per AT32F435 RM, ABORT flushes FIFOs and resets state machine
-	 * CMDSTS is rw1c and must be cleared unconditionally between commands */
-	qspi_prepare_cmd(cfg);
+	qspi_prepare_cmd(cfg);  /* Reset command engine and clear CMDSTS */
 
-	/* Fix for read_status mode: Status registers are always 1 byte
-	 * Force data_count=1 to make this unambiguous for the controller */
+	/* Enforce constraints for read_status mode */
 	if (read_status) {
-		data_count = 1;
+		if (data_count != 0 || write_data_enable) {
+			LOG_ERR("Invalid params for read_status: dcnt=%u wden=%d", data_count, write_data_enable);
+			return -EINVAL;
+		}
 	}
 
-	/* CRITICAL: Write command registers in exact sequence per RM - CMD_W0, W1, W2, then W3
-	 * Writing CMD_W3 triggers command execution, so it must be written LAST
-	 * All writes must be 32-bit word accesses */
-	
-	/* Configure CMD_W0 (address) */
+	/* Write command registers in sequence: CMD_W0, W1, W2, then W3 (W3 triggers execution) */
 	qspi_write_reg(cfg, QSPI_CMD_W0_OFFSET, address);
 
-	/* Configure CMD_W1 (address length, dummy cycles, instruction length, PE mode) */
-	/* IMPORTANT: PEMEN (bit 28) must be 0 for standard commands */
 	cmd_w1 = (addr_len << QSPI_CMD_W1_ADRLEN_POS) |
 		 (dummy_cycles << QSPI_CMD_W1_DUM2_POS) |
-		 ((instruction != 0 ? QSPI_INSLEN_1_BYTE : QSPI_INSLEN_0_BYTE)
-		  << QSPI_CMD_W1_INSLEN_POS);
-	/* Explicitly ensure PEMEN and reserved bits are 0 */
-	cmd_w1 &= ~(BIT(28) | BIT(29) | BIT(30) | BIT(31) | BIT(26) | BIT(27));
+		 ((instruction != 0 ? QSPI_INSLEN_1_BYTE : QSPI_INSLEN_0_BYTE) << QSPI_CMD_W1_INSLEN_POS);
+	cmd_w1 &= ~(BIT(28) | BIT(29) | BIT(30) | BIT(31) | BIT(26) | BIT(27));  /* Clear PEMEN and reserved */
 	qspi_write_reg(cfg, QSPI_CMD_W1_OFFSET, cmd_w1);
-
-	/* Configure CMD_W2 (data counter) */
 	qspi_write_reg(cfg, QSPI_CMD_W2_OFFSET, data_count);
 
-	/* Configure CMD_W3 (instruction, operation mode, control bits) */
-	cmd_w3 = (instruction << QSPI_CMD_W3_INSC_POS) |
-		 (opmode << QSPI_CMD_W3_OPMODE_POS);
-
-	/* Bit 1: write_data_enable - set ONLY for commands that write data to flash */
+	cmd_w3 = (instruction << QSPI_CMD_W3_INSC_POS) | (opmode << QSPI_CMD_W3_OPMODE_POS);
 	if (write_data_enable) {
 		cmd_w3 |= QSPI_CMD_W3_WDEN;
 	}
-
 	if (read_status) {
 		cmd_w3 |= QSPI_CMD_W3_RSTSEN;
-		/* Use hardware auto-read status */
-		/* Don't set RSTSC bit for hardware mode */
 	}
 	
-	/* flash_write_enable parameter is for future use with explicit WREN
-	 * (0x06 command) - not used for controller command execution */
-	(void)flash_write_enable;
-
-	/* CRITICAL: Writing CMD_W3 triggers command execution per SDK qspi_cmd_operation_kick()
-	 * The SDK writes this register LAST and returns immediately without any intervening reads.
-	 */
-	qspi_write_reg(cfg, QSPI_CMD_W3_OFFSET, cmd_w3);
+	(void)flash_write_enable;  /* Unused parameter */
+	qspi_write_reg(cfg, QSPI_CMD_W3_OFFSET, cmd_w3);  /* Triggers execution */
 
 	return 0;
 }
 
-/* Read Status Register-1 (BUSY, WEL) */
-static uint8_t qspi_read_sr1(const struct device *dev)
+/* Generic status register read with error handling */
+static int qspi_read_sr(const struct device *dev, uint8_t cmd, uint8_t *sr_out)
 {
 	const struct flash_artery_f435_qspi_config *cfg = dev->config;
+	int ret;
 
-	qspi_exec_cmd(cfg, SPI_NOR_CMD_RDSR, 0, QSPI_ADRLEN_0_BYTE, 0,
-		       QSPI_OPMODE_111, false, false, true, 0);
+	qspi_exec_cmd(cfg, cmd, 0, QSPI_ADRLEN_0_BYTE, 0, QSPI_OPMODE_111, false, false, true, 0);
+	ret = qspi_wait_cmd_complete(cfg, 100);
+	if (ret < 0) {
+		return ret;
+	}
 
-	qspi_wait_cmd_complete(cfg, 100);
-
-	return qspi_read_reg(cfg, QSPI_RSTS_OFFSET) & QSPI_RSTS_SPISTS_MASK;
+	*sr_out = qspi_read_reg(cfg, QSPI_RSTS_OFFSET) & QSPI_RSTS_SPISTS_MASK;
+	return 0;
 }
 
-/* Read Status Register-2 (QE, SUS) */
-static uint8_t qspi_read_sr2(const struct device *dev)
+static int qspi_read_sr1(const struct device *dev, uint8_t *sr1)
 {
-	const struct flash_artery_f435_qspi_config *cfg = dev->config;
-
-	qspi_exec_cmd(cfg, W25Q_CMD_READ_SR2, 0, QSPI_ADRLEN_0_BYTE, 0,
-		       QSPI_OPMODE_111, false, false, true, 0);
-
-	qspi_wait_cmd_complete(cfg, 100);
-
-	return qspi_read_reg(cfg, QSPI_RSTS_OFFSET) & QSPI_RSTS_SPISTS_MASK;
+	return qspi_read_sr(dev, SPI_NOR_CMD_RDSR, sr1);
 }
 
-/* Read Status Register-3 (ADS, ADP, WPS) */
-static uint8_t qspi_read_sr3(const struct device *dev)
+static int qspi_read_sr2(const struct device *dev, uint8_t *sr2)
 {
-	const struct flash_artery_f435_qspi_config *cfg = dev->config;
-
-	qspi_exec_cmd(cfg, W25Q_CMD_READ_SR3, 0, QSPI_ADRLEN_0_BYTE, 0,
-		       QSPI_OPMODE_111, false, false, true, 0);
-
-	qspi_wait_cmd_complete(cfg, 100);
-
-	return qspi_read_reg(cfg, QSPI_RSTS_OFFSET) & QSPI_RSTS_SPISTS_MASK;
+	return qspi_read_sr(dev, CMD_READ_SR2, sr2);
 }
 
-/* Read flash status register (alias for SR1) */
-static uint8_t qspi_flash_read_status(const struct device *dev)
+static int qspi_read_sr3(const struct device *dev, uint8_t *sr3)
 {
-	return qspi_read_sr1(dev);
+	return qspi_read_sr(dev, CMD_READ_SR3, sr3);
+}
+
+/* Get current address byte count (centralized) */
+static inline uint8_t qspi_addr_bytes_for_op(const struct device *dev)
+{
+	struct flash_artery_f435_qspi_data *data = dev->data;
+	return data->caps.addr_bytes;
+}
+
+/* Read flash busy status using configured opcode */
+static int qspi_flash_read_status(const struct device *dev, uint8_t *status)
+{
+	struct flash_artery_f435_qspi_data *data = dev->data;
+	return qspi_read_sr(dev, data->caps.busy_opcode, status);
 }
 
 /* Wait for flash to be ready (not busy) */
 static int qspi_flash_wait_ready(const struct device *dev, uint32_t timeout_ms)
 {
+	struct flash_artery_f435_qspi_data *data = dev->data;
 	uint32_t start = k_uptime_get_32();
 	uint8_t status;
-	bool ever_busy = false;
-	uint32_t iterations = 0;
+	int ret;
 
 	do {
-		status = qspi_flash_read_status(dev);
-		iterations++;
-		
-		/* Track if we ever saw BUSY=1 (datasheet requirement for erase/program) */
-		if (status & W25Q_SR1_BUSY) {
-			ever_busy = true;
+		ret = qspi_flash_read_status(dev, &status);
+		if (ret < 0) {
+			return ret;
 		}
 		
-		if (!(status & W25Q_SR1_BUSY)) {
-			/* Operation complete - verify datasheet behavior */
-			uint8_t wel = (status >> 1) & 1;
-			
-			/* DATASHEET CHECK: After erase/program, WEL should auto-clear to 0 */
-			if (ever_busy && wel != 0) {
-				LOG_WRN("WEL still set after operation (SR1=0x%02x)", status);
-			}
-			
+		if (!(status & data->caps.busy_bit)) {
 			return 0;
 		}
+		
 		if (k_uptime_get_32() - start > timeout_ms) {
-			LOG_ERR("Timeout waiting for flash ready (SR1=0x%02x, iterations=%u)",
-				status, iterations);
+			LOG_ERR("Timeout waiting for flash ready (status=0x%02x)", status);
 			return -ETIMEDOUT;
 		}
-		k_yield();
+		
+		k_sleep(K_MSEC(1));  /* Avoid hot spinning */
 	} while (true);
 }
 
-/* Software reset sequence (W25Q512JV: 66h then 99h) */
-static int w25q_software_reset(const struct device *dev)
+/* Software reset sequence (generic: 66h then 99h) - optional, recovers from stuck states */
+static int flash_software_reset(const struct device *dev)
 {
 	const struct flash_artery_f435_qspi_config *cfg = dev->config;
+	struct flash_artery_f435_qspi_data *data = dev->data;
 	int ret;
 
-	LOG_INF("Performing software reset");
-
-	/* Enable Reset (66h) - SDK uses write_data_enable=TRUE for instruction-only commands
-	 * This sets CMD_W3.WEN bit which triggers command execution */
-	qspi_exec_cmd(cfg, W25Q_CMD_ENABLE_RESET, 0, QSPI_ADRLEN_0_BYTE, 0,
-		       QSPI_OPMODE_111, false, true, false, 0);
-	ret = qspi_wait_cmd_complete(cfg, 100);
-	if (ret < 0) {
-		return ret;
+	if (!data->caps.reset_supported) {
+		return 0;  /* Skip if not supported */
 	}
 
-	/* Reset Device (99h) - SDK uses write_data_enable=TRUE for instruction-only */
-	qspi_exec_cmd(cfg, W25Q_CMD_RESET_DEVICE, 0, QSPI_ADRLEN_0_BYTE, 0,
+	LOG_DBG("Performing software reset");
+
+	/* Enable Reset (66h) then Reset Device (99h) */
+	qspi_exec_cmd(cfg, CMD_ENABLE_RESET, 0, QSPI_ADRLEN_0_BYTE, 0,
 		       QSPI_OPMODE_111, false, true, false, 0);
-	ret = qspi_wait_cmd_complete(cfg, 100);
-	if (ret < 0) {
-		return ret;
+	if ((ret = qspi_wait_cmd_complete(cfg, 100)) < 0) {
+		LOG_WRN("Reset enable failed, ignoring");
+		return 0;  /* Non-fatal */
 	}
 
-	/* CRITICAL: Wait for reset to complete (W25Q512JV tRST = 30µs typ, 30µs max)
-	 * This is MANDATORY before issuing any subsequent commands */
-	k_busy_wait(50);
+	qspi_exec_cmd(cfg, CMD_RESET_DEVICE, 0, QSPI_ADRLEN_0_BYTE, 0,
+		       QSPI_OPMODE_111, false, true, false, 0);
+	if ((ret = qspi_wait_cmd_complete(cfg, 100)) < 0) {
+		LOG_WRN("Reset device failed, ignoring");
+		return 0;  /* Non-fatal */
+	}
 
+	k_busy_wait(50);  /* Wait tRST */
 	LOG_INF("Software reset complete");
 	return 0;
 }
@@ -524,34 +517,28 @@ static int qspi_write_enable(const struct device *dev)
 	int ret;
 	uint8_t sr1;
 
-	/* Write Enable - SDK uses write_data_enable=TRUE for instruction-only */
 	qspi_exec_cmd(cfg, SPI_NOR_CMD_WREN, 0, QSPI_ADRLEN_0_BYTE, 0,
 		      QSPI_OPMODE_111, false, true, false, 0);
 
-	ret = qspi_wait_cmd_complete(cfg, 1000);
-	if (ret < 0) {
+	if ((ret = qspi_wait_cmd_complete(cfg, 1000)) < 0) {
 		return ret;
 	}
 
-	/* CRITICAL DATASHEET VERIFICATION: After WREN, WEL bit (SR1[1]) MUST be set
-	 * If WEL=0, subsequent program/erase will be ignored by the flash */
-	sr1 = qspi_read_sr1(dev);
-	if (!(sr1 & BIT(1))) {  /* WEL is bit 1 */
+	/* Verify WEL bit is set after WREN */
+	if ((ret = qspi_read_sr1(dev, &sr1)) < 0) {
+		return ret;
+	}
+
+	if (!(sr1 & W25Q_SR1_WEL)) {
 		LOG_ERR("WREN failed: WEL bit not set! SR1=0x%02x", sr1);
 		return -EIO;
 	}
 
-	/* Only log on first few operations, then silent success */
-	static uint8_t wren_log_count = 0;
-	if (wren_log_count < 3) {
-		LOG_INF("WREN OK: WEL=1 (SR1=0x%02x)", sr1);
-		wren_log_count++;
-	}
 	return 0;
 }
 
-/* Enter 4-byte address mode (W25Q512JV: B7h) */
-static int w25q_enter_4byte_mode(const struct device *dev)
+/* Enter 4-byte address mode (B7h) - for parts that support mode switching */
+static int flash_enter_4byte_mode(const struct device *dev)
 {
 	const struct flash_artery_f435_qspi_config *cfg = dev->config;
 	struct flash_artery_f435_qspi_data *data = dev->data;
@@ -560,91 +547,77 @@ static int w25q_enter_4byte_mode(const struct device *dev)
 
 	LOG_INF("Entering 4-byte address mode");
 
-	/* NOTE: W25Q512JV B7h command does NOT require WREN (it's just a mode command)
-	 * Removing unnecessary WREN that was complicating state */
-
-	/* Send Enter 4-Byte Address Mode command - SDK uses write_data_enable=TRUE */
-	qspi_exec_cmd(cfg, W25Q_CMD_ENTER_4B_ADDR, 0, QSPI_ADRLEN_0_BYTE, 0,
+	qspi_exec_cmd(cfg, CMD_ENTER_4B_ADDR, 0, QSPI_ADRLEN_0_BYTE, 0,
 		      QSPI_OPMODE_111, false, true, false, 0);
-	ret = qspi_wait_cmd_complete(cfg, 100);
-	if (ret < 0) {
-		LOG_ERR("Failed to enter 4-byte mode");
+	if ((ret = qspi_wait_cmd_complete(cfg, 100)) < 0) {
+		LOG_WRN("Failed to enter 4-byte mode command: %d", ret);
 		return ret;
 	}
 
-	/* Small delay for flash to update internal state after mode change */
 	k_busy_wait(10);
 
-	/* Verify by reading SR3 and checking ADS bit */
-	sr3 = qspi_read_sr3(dev);
-	if (sr3 & W25Q_SR3_ADS) {
-		data->flag_access_32bit = true;
-		LOG_INF("4-byte address mode enabled (ADS=1)");
-		return 0;
-	} else {
-		LOG_WRN("4-byte mode command sent but ADS=0");
-		return -EIO;
-	}
-}
-
-/* Set Read Parameters (C0h) - Configure dummy cycles for quad I/O reads */
-static int w25q_set_read_parameters(const struct device *dev, uint8_t dummy_config)
-{
-	const struct flash_artery_f435_qspi_config *cfg = dev->config;
-	int ret;
-
-	LOG_DBG("Setting read parameters: dummy config 0x%02x", dummy_config);
-
-	/* Set Read Parameters: P[7]=0 (dummy cycles), P[6:4]=dummy config, P[3:0]=0xF (wrap disabled) */
-	uint8_t param = dummy_config | 0x0F;
-
-	qspi_exec_cmd(cfg, W25Q_CMD_SET_READ_PARAMS, 0, QSPI_ADRLEN_0_BYTE, 0,
-		      QSPI_OPMODE_111, true, true, false, 1);
-
-	qspi_write_byte(cfg, param);
-
-	ret = qspi_wait_cmd_complete(cfg, 100);
-	if (ret < 0) {
-		LOG_ERR("Failed to set read parameters");
-		return ret;
+	/* Try to verify ADS bit in SR3 (Winbond/similar) - optional */
+	if (qspi_read_sr3(dev, &sr3) == 0) {
+		if (sr3 & W25Q_SR3_ADS) {
+			LOG_INF("4-byte mode verified (ADS=1)");
+		} else {
+			LOG_WRN("SR3.ADS=0 after enter 4B command, may not be supported");
+		}
 	}
 
-	LOG_DBG("Read parameters configured");
+	data->caps.in_4b_mode = true;
+	data->caps.addr_bytes = 4;
+	LOG_INF("4-byte addressing mode enabled");
 	return 0;
 }
 
-/* Global Block/Sector Unlock (98h) - Required if WPS=1 */
-static int w25q_global_unlock(const struct device *dev)
+/* Exit 4-byte address mode (E9h) - cleanup for pm_device */
+__maybe_unused
+static int flash_exit_4byte_mode(const struct device *dev)
+{
+	const struct flash_artery_f435_qspi_config *cfg = dev->config;
+	struct flash_artery_f435_qspi_data *data = dev->data;
+	int ret;
+
+	if (!data->caps.in_4b_mode) {
+		return 0;
+	}
+
+	LOG_DBG("Exiting 4-byte address mode");
+
+	qspi_exec_cmd(cfg, CMD_EXIT_4B_ADDR, 0, QSPI_ADRLEN_0_BYTE, 0,
+		      QSPI_OPMODE_111, false, true, false, 0);
+	if ((ret = qspi_wait_cmd_complete(cfg, 100)) < 0) {
+		LOG_WRN("Failed to exit 4-byte mode: %d", ret);
+		return ret;
+	}
+
+	k_busy_wait(10);
+	data->caps.in_4b_mode = false;
+	data->caps.addr_bytes = 3;
+	return 0;
+}
+
+
+/* Global Block/Sector Unlock (98h) - Winbond-specific, try but don't fail if unsupported */
+static int flash_global_unlock(const struct device *dev)
 {
 	const struct flash_artery_f435_qspi_config *cfg = dev->config;
 	int ret;
 
-	LOG_INF("Performing global block unlock");
+	LOG_DBG("Attempting global block unlock");
 
-	/* Send write enable */
-	ret = qspi_write_enable(dev);
-	if (ret < 0) {
+	if ((ret = qspi_write_enable(dev)) < 0) {
 		return ret;
 	}
 
-	/* Send Global Block/Sector Unlock - SDK uses write_data_enable=TRUE */
-	ret = qspi_write_enable(dev);
-	if (ret < 0) {
-		return ret;
-	}
-	qspi_exec_cmd(cfg, W25Q_CMD_GLOBAL_BLOCK_UNLOCK, 0, QSPI_ADRLEN_0_BYTE, 0,
+	qspi_exec_cmd(cfg, 0x98, 0, QSPI_ADRLEN_0_BYTE, 0,  /* 0x98 = Global Block Unlock */
 		       QSPI_OPMODE_111, false, true, false, 0);
 
-	ret = qspi_wait_cmd_complete(cfg, 100);
-	if (ret < 0) {
-		LOG_ERR("Failed to perform global unlock");
-		return ret;
-	}
-
-	/* Wait for operation to complete */
-	ret = qspi_flash_wait_ready(dev, W25Q_TIMEOUT_WRITE_STATUS);
-	if (ret < 0) {
-		return ret;
+	if ((ret = qspi_wait_cmd_complete(cfg, 100)) < 0 ||
+	    (ret = qspi_flash_wait_ready(dev, W25Q_TIMEOUT_WRITE_STATUS)) < 0) {
+		LOG_WRN("Global unlock failed (may not be supported): %d", ret);
+		return 0;  /* Non-fatal */
 	}
 
 	LOG_INF("Global unlock complete");
@@ -663,82 +636,24 @@ static int flash_artery_f435_qspi_read_jedec_id(const struct device *dev, uint8_
 		return -EBUSY;
 	}
 
-	/* Execute JEDEC ID read command */
 	qspi_exec_cmd(cfg, SPI_NOR_CMD_RDID, 0, QSPI_ADRLEN_0_BYTE, 0,
 		      QSPI_OPMODE_111, false, false, false, len);
 
-	/* Wait for RX FIFO to have data ready */
-	uint32_t start = k_uptime_get_32();
-	while (!(qspi_read_reg(cfg, QSPI_FIFOSTS_OFFSET) & QSPI_FIFOSTS_RXFIFORDY)) {
-		if (k_uptime_get_32() - start > 1000) {
-			LOG_ERR("RX FIFO timeout waiting for JEDEC ID");
-			k_sem_give(&data->sem);
-			return -ETIMEDOUT;
-		}
-		k_yield();
+	if ((ret = qspi_wait_fifo(cfg, QSPI_FIFOSTS_RXFIFORDY, 1000)) < 0) {
+		LOG_ERR("RX FIFO timeout");
+		k_sem_give(&data->sem);
+		return ret;
 	}
 
-	/* Read JEDEC ID bytes from FIFO */
 	for (size_t i = 0; i < len; i++) {
 		jedec_id[i] = qspi_read_byte(cfg);
 	}
 
-	/* Wait for command to complete */
 	ret = qspi_wait_cmd_complete(cfg, 1000);
-	if (ret < 0) {
-		LOG_ERR("JEDEC ID command did not complete");
-		k_sem_give(&data->sem);
-		return ret;
-	}
-
 	k_sem_give(&data->sem);
-
 	return ret;
 }
 
-/* Read SFDP data */
-static int flash_artery_f435_qspi_read_sfdp(const struct device *dev, off_t addr,
-					     void *data_buf, size_t size)
-{
-	const struct flash_artery_f435_qspi_config *cfg = dev->config;
-	struct flash_artery_f435_qspi_data *data = dev->data;
-	uint8_t *buf = (uint8_t *)data_buf;
-	int ret;
-
-	if (k_sem_take(&data->sem, K_SECONDS(1)) != 0) {
-		return -EBUSY;
-	}
-
-	/* SFDP read: 1-1-1 mode, 3-byte address, 8 dummy cycles */
-	qspi_exec_cmd(cfg, JESD216_CMD_READ_SFDP, addr, QSPI_ADRLEN_3_BYTE, 8,
-		      QSPI_OPMODE_111, false, false, false, size);
-
-	/* Wait for RX FIFO ready, then read data */
-	uint32_t start = k_uptime_get_32();
-	while (!(qspi_read_reg(cfg, QSPI_FIFOSTS_OFFSET) & QSPI_FIFOSTS_RXFIFORDY)) {
-		if (k_uptime_get_32() - start > 1000) {
-			k_sem_give(&data->sem);
-			return -ETIMEDOUT;
-		}
-		k_yield();
-	}
-
-	/* Read SFDP data from FIFO */
-	for (size_t i = 0; i < size; i++) {
-		buf[i] = qspi_read_byte(cfg);
-	}
-
-	/* Wait for command to complete */
-	ret = qspi_wait_cmd_complete(cfg, 1000);
-	if (ret < 0) {
-		k_sem_give(&data->sem);
-		return ret;
-	}
-
-	k_sem_give(&data->sem);
-
-	return ret;
-}
 
 /* Flash read operation */
 static int flash_artery_f435_qspi_read(const struct device *dev, off_t addr,
@@ -763,70 +678,30 @@ static int flash_artery_f435_qspi_read(const struct device *dev, off_t addr,
 		return -EBUSY;
 	}
 
-	/* Use 1-4-4 quad read if enabled, otherwise standard read */
-	uint8_t read_cmd = data->flag_quad_io_en ? SPI_NOR_CMD_4READ : SPI_NOR_CMD_READ;
-	uint8_t opmode = data->flag_quad_io_en ? QSPI_OPMODE_144 : QSPI_OPMODE_111;
-	uint8_t dummy_cycles = data->flag_quad_io_en ? 4 : 0;
+	/* Use runtime-selected read command from capabilities */
+	uint8_t read_cmd = data->caps.read_opcode;
+	uint8_t opmode = data->caps.read_opmode;
+	uint8_t dummy_cycles = data->caps.read_dummy_cycles;
+	uint8_t addr_len = qspi_addr_bytes_for_op(dev);
 
-	/* Address format depends on current flash mode */
-	uint32_t flash_addr = addr;
-	uint8_t addr_len = data->flag_access_32bit ? QSPI_ADRLEN_4_BYTE : QSPI_ADRLEN_3_BYTE;
+	qspi_exec_cmd(cfg, read_cmd, addr, addr_len, dummy_cycles, opmode, false, false, false, size);
 
-	/* CRITICAL: 0xEB (Fast Read Quad I/O) ALWAYS requires a mode byte (M7-M0)
-	 * The mode byte controls continuous read mode and comes after the address.
-	 * For AT32F435 QSPI controller, we pack it into CMD_W0 by encoding as:
-	 *   (address << 8) | mode_byte
-	 * This shifts address left, putting mode byte in the LSB position.
-	 * 
-	 * Mode byte 0xFF = exit continuous read (standard operation)
-	 * 
-	 * Address length must be increased by 1 byte to account for mode byte:
-	 * - 3-byte mode: addr_len=4 (3 addr bytes + 1 mode byte)
-	 * - 4-byte mode: addr_len=5 (4 addr bytes + 1 mode byte) - but we don't support this yet
-	 */
-	if (read_cmd == SPI_NOR_CMD_4READ) {
-		/* Always include mode byte for 0xEB command */
-		flash_addr = (addr << 8) | 0xFF;  /* 0xFF = exit continuous read */
-		addr_len = QSPI_ADRLEN_4_BYTE;    /* 3 address bytes + 1 mode byte = 4 total */
-	}
-
-	/* Start read command */
-	qspi_exec_cmd(cfg, read_cmd, flash_addr, addr_len, dummy_cycles,
-		      opmode, false, false, false, size);
-
-	/* CRITICAL: Read data from FIFO in chunks BEFORE waiting for command complete
-	 * The command may not complete until FIFO is drained! */
+	/* Read data from FIFO in chunks before waiting for command complete */
 	while (size > 0) {
 		to_read = MIN(size, QSPI_FIFO_DEPTH);
-
-		/* Wait for RX FIFO to have data ready */
-		uint32_t start = k_uptime_get_32();
-		while (!(qspi_read_reg(cfg, QSPI_FIFOSTS_OFFSET) & QSPI_FIFOSTS_RXFIFORDY)) {
-			if (k_uptime_get_32() - start > 1000) {
-				LOG_ERR("RX FIFO timeout");
-				k_sem_give(&data->sem);
-				return -ETIMEDOUT;
-			}
-			k_yield();
+		if ((ret = qspi_wait_fifo(cfg, QSPI_FIFOSTS_RXFIFORDY, 1000)) < 0) {
+			LOG_ERR("RX FIFO timeout");
+			k_sem_give(&data->sem);
+			return ret;
 		}
-
-		/* Read chunk from FIFO */
 		for (uint32_t i = 0; i < to_read; i++) {
 			*buf++ = qspi_read_byte(cfg);
 		}
-
 		size -= to_read;
 	}
 
-	/* Now wait for command to complete */
 	ret = qspi_wait_cmd_complete(cfg, 1000);
-	if (ret < 0) {
-		k_sem_give(&data->sem);
-		return ret;
-	}
-
 	k_sem_give(&data->sem);
-
 	return ret;
 }
 
@@ -866,47 +741,25 @@ static int flash_artery_f435_qspi_write(const struct device *dev, off_t addr,
 			break;
 		}
 
-		/* Use quad page program if enabled, otherwise standard page program */
-		uint8_t write_cmd = data->flag_quad_io_en ? 0x32 : SPI_NOR_CMD_PP;
-		uint8_t opmode = data->flag_quad_io_en ? QSPI_OPMODE_114 : QSPI_OPMODE_111;
-		uint8_t addr_len = data->flag_access_32bit ? QSPI_ADRLEN_4_BYTE :
-				   QSPI_ADRLEN_3_BYTE;
+		/* Use runtime-selected program command from capabilities */
+		uint8_t write_cmd = data->caps.prog_opcode;
+		uint8_t opmode = data->caps.prog_opmode;
+		uint8_t addr_len = qspi_addr_bytes_for_op(dev);
 
-		/* Execute write command */
 		qspi_exec_cmd(cfg, write_cmd, addr, addr_len, 0, opmode, true, true, false, to_write);
 
-		/* Write data bytes - CRITICAL: wait for TX FIFO ready before EACH byte
-		 * per SDK example (command_port_using_interrupt/qspi_cmd_en25qh128a.c) */
+		/* Write data bytes - wait for TX FIFO ready before each byte */
 		for (uint32_t i = 0; i < to_write; i++) {
-			/* Wait for TX FIFO to be ready to accept next byte */
-			uint32_t start = k_uptime_get_32();
-			while (!(qspi_read_reg(cfg, QSPI_FIFOSTS_OFFSET) & QSPI_FIFOSTS_TXFIFORDY)) {
-				if (k_uptime_get_32() - start > 1000) {
-					LOG_ERR("TX FIFO timeout at byte %u", i);
-					ret = -ETIMEDOUT;
-					break;
-				}
-				k_yield();
-			}
-			if (ret < 0) {
+			if ((ret = qspi_wait_fifo(cfg, QSPI_FIFOSTS_TXFIFORDY, 1000)) < 0) {
+				LOG_ERR("TX FIFO timeout at byte %u", i);
 				break;
 			}
 			qspi_write_byte(cfg, *buf++);
 		}
 
-		if (ret < 0) {
-			break;
-		}
-
-		ret = qspi_wait_cmd_complete(cfg, 1000);
-		if (ret < 0) {
-			break;
-		}
-
-		/* Wait for page program to complete (W25Q512JV: max 3.5ms) */
-		ret = qspi_flash_wait_ready(dev, W25Q_TIMEOUT_PAGE_PROGRAM);
-		if (ret < 0) {
-			LOG_ERR("Page program timeout at addr=0x%lx", (long)(addr - to_write));
+		if (ret < 0 || (ret = qspi_wait_cmd_complete(cfg, 1000)) < 0 ||
+		    (ret = qspi_flash_wait_ready(dev, W25Q_TIMEOUT_PAGE_PROGRAM)) < 0) {
+			LOG_ERR("Page program failed at addr=0x%lx", (long)addr);
 			break;
 		}
 
@@ -943,38 +796,34 @@ static int flash_artery_f435_qspi_erase(const struct device *dev, off_t addr, si
 	if (size == cfg->flash_size && addr == 0) {
 		LOG_WRN("Performing full chip erase (will take several minutes)");
 
-		ret = qspi_write_enable(dev);
-		if (ret < 0) {
+		if ((ret = qspi_write_enable(dev)) < 0) {
 			goto out;
 		}
 
 		qspi_exec_cmd(cfg, SPI_NOR_CMD_CE, 0, QSPI_ADRLEN_0_BYTE, 0,
 			       QSPI_OPMODE_111, false, true, false, 0);
 
-		ret = qspi_wait_cmd_complete(cfg, 1000);
-		if (ret < 0) {
+		if ((ret = qspi_wait_cmd_complete(cfg, 1000)) < 0 ||
+		    (ret = qspi_flash_wait_ready(dev, W25Q_TIMEOUT_CHIP_ERASE)) < 0) {
 			goto out;
 		}
 
-		/* Wait for chip erase (W25Q512JV: typ 200s, max 1000s) */
-		ret = qspi_flash_wait_ready(dev, W25Q_TIMEOUT_CHIP_ERASE);
 		LOG_INF("Chip erase complete");
 		goto out;
 	}
 
-	/* Sector/block erase with W25Q512JV-appropriate timeouts */
-	uint8_t addr_len = data->flag_access_32bit ? QSPI_ADRLEN_4_BYTE : QSPI_ADRLEN_3_BYTE;
+	/* Use capability-driven erase (from SFDP or fallback) */
+	uint8_t addr_len = qspi_addr_bytes_for_op(dev);
 
 	while (size > 0) {
-		const struct jesd216_erase_type *etp = NULL;
 		const struct jesd216_erase_type *best_etp = NULL;
 		uint32_t timeout_ms;
 
-		/* Find the best (largest) erase type that fits */
+		/* Find best (largest) erase type that fits */
 		for (uint8_t ei = 0; ei < JESD216_NUM_ERASE_TYPES; ++ei) {
-			etp = &data->erase_types[ei];
+			const struct jesd216_erase_type *etp = &data->caps.erase_types[ei];
 
-			if ((etp->exp != 0) &&
+			if ((etp->cmd != 0) && (etp->exp != 0) &&
 			    SPI_NOR_IS_ALIGNED(addr, etp->exp) &&
 			    SPI_NOR_IS_ALIGNED(size, etp->exp) &&
 			    ((best_etp == NULL) || (etp->exp > best_etp->exp))) {
@@ -983,46 +832,35 @@ static int flash_artery_f435_qspi_erase(const struct device *dev, off_t addr, si
 		}
 
 		if (best_etp == NULL) {
-			LOG_ERR("No suitable erase type for addr=0x%lx, size=%zu",
-				(long)addr, size);
+			LOG_ERR("No suitable erase type for addr=0x%lx, size=%zu", (long)addr, size);
 			ret = -EINVAL;
 			break;
 		}
 
-		/* Select timeout based on erase size (W25Q512JV datasheet) */
 		uint32_t erase_size = BIT(best_etp->exp);
-		if (erase_size == 4096) {
-			timeout_ms = W25Q_TIMEOUT_SECTOR_ERASE;  /* 4KB: 400ms */
-		} else if (erase_size == 32768) {
-			timeout_ms = W25Q_TIMEOUT_BLOCK_ERASE_32K;  /* 32KB: 1600ms */
-		} else if (erase_size == 65536) {
-			timeout_ms = W25Q_TIMEOUT_BLOCK_ERASE_64K;  /* 64KB: 2000ms */
+		
+		/* Select timeout based on erase size */
+		if (erase_size <= 4096) {
+			timeout_ms = W25Q_TIMEOUT_SECTOR_ERASE;
+		} else if (erase_size <= 32768) {
+			timeout_ms = W25Q_TIMEOUT_BLOCK_ERASE_32K;
 		} else {
-			timeout_ms = W25Q_TIMEOUT_BLOCK_ERASE_64K;  /* Default */
+			timeout_ms = W25Q_TIMEOUT_BLOCK_ERASE_64K;
 		}
 
-		ret = qspi_write_enable(dev);
-		if (ret < 0) {
+		if ((ret = qspi_write_enable(dev)) < 0) {
 			break;
 		}
 
-		/* Execute erase command - has address but no data, use write_data_enable=TRUE */
-		qspi_exec_cmd(cfg, best_etp->cmd, addr, addr_len, 0,
-			       QSPI_OPMODE_111, false, true, false, 0);
+		qspi_exec_cmd(cfg, best_etp->cmd, addr, addr_len, 0, QSPI_OPMODE_111, false, true, false, 0);
 
-		ret = qspi_wait_cmd_complete(cfg, 1000);
-		if (ret < 0) {
+		if ((ret = qspi_wait_cmd_complete(cfg, 1000)) < 0 ||
+		    (ret = qspi_flash_wait_ready(dev, timeout_ms)) < 0) {
+			LOG_ERR("Erase failed at addr=0x%lx", (long)addr);
 			break;
 		}
 
-		/* Wait for erase to complete with appropriate timeout */
-		ret = qspi_flash_wait_ready(dev, timeout_ms);
-		if (ret < 0) {
-			LOG_ERR("Erase timeout at addr=0x%lx", (long)addr);
-			break;
-		}
-
-		LOG_DBG("Erased %u bytes at 0x%lx", erase_size, (long)addr);
+		LOG_DBG("Erased %u bytes at 0x%lx (cmd=0x%02x)", erase_size, (long)addr, best_etp->cmd);
 
 		addr += erase_size;
 		size -= erase_size;
@@ -1071,309 +909,404 @@ static const struct flash_driver_api flash_artery_f435_qspi_api = {
 #endif
 };
 
-/* Enable Quad Enable (QE) bit in Status Register-2 */
-static int w25q_enable_quad_mode(const struct device *dev)
+/* Enable Quad - abstracted for different QER methods (SFDP 15h DW15[22:20]) */
+static int flash_enable_quad(const struct device *dev)
 {
 	const struct flash_artery_f435_qspi_config *cfg = dev->config;
+	struct flash_artery_f435_qspi_data *data = dev->data;
 	uint8_t sr2;
 	int ret;
 
-	/* Read current SR2 value */
-	sr2 = qspi_read_sr2(dev);
+	/* Try common "QE in SR2 bit 1" method (QER=001b or 010b in SFDP) */
+	if ((ret = qspi_read_sr2(dev, &sr2)) < 0) {
+		LOG_WRN("Cannot read SR2, quad mode disabled");
+		return -ENOTSUP;
+	}
 
-	/* Check if QE bit is already set */
 	if (sr2 & W25Q_SR2_QE) {
 		LOG_INF("Quad Enable (QE) bit already set");
+		data->caps.quad_enabled = true;
 		return 0;
 	}
 
 	LOG_INF("Setting Quad Enable (QE) bit in SR2");
 
-	/* Enable write */
-	ret = qspi_write_enable(dev);
-	if (ret < 0) {
+	if ((ret = qspi_write_enable(dev)) < 0) {
 		return ret;
 	}
 
-	/* Write Status Register-2 with QE bit set */
-	qspi_exec_cmd(cfg, W25Q_CMD_WRITE_SR2, 0, QSPI_ADRLEN_0_BYTE, 0,
+	qspi_exec_cmd(cfg, CMD_WRITE_SR2, 0, QSPI_ADRLEN_0_BYTE, 0,
 		       QSPI_OPMODE_111, true, true, false, 1);
-
 	qspi_write_byte(cfg, sr2 | W25Q_SR2_QE);
 
-	ret = qspi_wait_cmd_complete(cfg, 100);
-	if (ret < 0) {
-		LOG_ERR("Failed to write SR2");
-		return ret;
-	}
-
-	/* Wait for write to complete (tW max: 15ms) */
-	ret = qspi_flash_wait_ready(dev, W25Q_TIMEOUT_WRITE_STATUS);
-	if (ret < 0) {
-		LOG_ERR("Timeout waiting for SR2 write");
-		return ret;
-	}
-
-	/* Verify QE bit was set */
-	sr2 = qspi_read_sr2(dev);
-	if (sr2 & W25Q_SR2_QE) {
-		LOG_INF("Quad Enable (QE) bit successfully set");
-		return 0;
-	} else {
-		LOG_ERR("QE bit verification failed");
+	if ((ret = qspi_wait_cmd_complete(cfg, 100)) < 0 ||
+	    (ret = qspi_flash_wait_ready(dev, W25Q_TIMEOUT_WRITE_STATUS)) < 0) {
+		LOG_WRN("Failed to write SR2, quad disabled");
 		return -EIO;
 	}
+
+	if ((ret = qspi_read_sr2(dev, &sr2)) < 0 || !(sr2 & W25Q_SR2_QE)) {
+		LOG_WRN("QE bit verification failed, quad disabled");
+		return -EIO;
+	}
+	
+	data->caps.quad_enabled = true;
+	LOG_INF("Quad Enable (QE) bit successfully set");
+	return 0;
+}
+
+/* Read SFDP data (uses 3-byte addressing always) */
+static int flash_read_sfdp(const struct device *dev, off_t addr, void *data_buf, size_t size)
+{
+	const struct flash_artery_f435_qspi_config *cfg = dev->config;
+	struct flash_artery_f435_qspi_data *data = dev->data;
+	uint8_t *buf = (uint8_t *)data_buf;
+	int ret;
+
+	if (k_sem_take(&data->sem, K_SECONDS(1)) != 0) {
+		return -EBUSY;
+	}
+
+	/* SFDP read: always 3-byte address, 8 dummy cycles */
+	qspi_exec_cmd(cfg, JESD216_CMD_READ_SFDP, addr, QSPI_ADRLEN_3_BYTE, 8,
+		      QSPI_OPMODE_111, false, false, false, size);
+
+	if ((ret = qspi_wait_fifo(cfg, QSPI_FIFOSTS_RXFIFORDY, 1000)) < 0) {
+		k_sem_give(&data->sem);
+		return ret;
+	}
+
+	for (size_t i = 0; i < size; i++) {
+		buf[i] = qspi_read_byte(cfg);
+	}
+
+	ret = qspi_wait_cmd_complete(cfg, 1000);
+	k_sem_give(&data->sem);
+	return ret;
+}
+
+/* Setup conservative fallback capabilities (no SFDP) */
+static void setup_fallback_caps(const struct device *dev)
+{
+	const struct flash_artery_f435_qspi_config *cfg = dev->config;
+	struct flash_artery_f435_qspi_data *data = dev->data;
+
+	LOG_INF("Using conservative fallback capabilities");
+
+	/* Read: 1-1-1 fast read (0x0B) with 8 dummy cycles - universally supported */
+	data->caps.read_opcode = CMD_FAST_READ;
+	data->caps.read_opmode = QSPI_OPMODE_111;
+	data->caps.read_dummy_cycles = 8;
+
+	/* Program: standard 1-1-1 page program */
+	data->caps.prog_opcode = SPI_NOR_CMD_PP;
+	data->caps.prog_opmode = QSPI_OPMODE_111;
+
+	/* Erase: assume common 4KB + 64KB */
+	data->caps.erase_types[0].cmd = CMD_ERASE_4K;
+	data->caps.erase_types[0].exp = 12;  /* 4KB */
+	data->caps.erase_types[1].cmd = CMD_ERASE_64K;
+	data->caps.erase_types[1].exp = 16;  /* 64KB */
+
+	/* Addressing: 3-byte unless flash >16MB */
+	if (cfg->flash_size > (16 * 1024 * 1024)) {
+		LOG_INF("Flash >16MB, will need 4-byte addressing");
+		data->caps.addr_bytes = 4;
+	} else {
+		data->caps.addr_bytes = 3;
+	}
+
+	/* Status polling: standard RDSR */
+	data->caps.busy_opcode = SPI_NOR_CMD_RDSR;
+	data->caps.busy_bit = W25Q_SR1_BUSY;
+
+	/* Flags */
+	data->caps.quad_enabled = false;
+	data->caps.supports_4b_opcodes = false;
+	data->caps.in_4b_mode = false;
+	data->caps.reset_supported = true;  /* Try reset, ignore if fails */
+}
+
+/* Parse SFDP and setup capabilities */
+static int setup_caps_from_sfdp(const struct device *dev)
+{
+	const struct flash_artery_f435_qspi_config *cfg = dev->config;
+	struct flash_artery_f435_qspi_data *data = dev->data;
+	const uint8_t decl_nph = 3;
+	union {
+		uint8_t raw[JESD216_SFDP_SIZE(decl_nph)];
+		struct jesd216_sfdp_header sfdp;
+	} u;
+	const struct jesd216_sfdp_header *hp = &u.sfdp;
+	int ret;
+
+	/* Try to read SFDP header */
+	ret = flash_read_sfdp(dev, 0, u.raw, sizeof(u.raw));
+	if (ret < 0) {
+		LOG_WRN("SFDP read failed: %d, using fallback", ret);
+		return -ENOTSUP;
+	}
+
+	uint32_t magic = jesd216_sfdp_magic(hp);
+	if (magic != JESD216_SFDP_MAGIC) {
+		LOG_WRN("Invalid SFDP magic: 0x%08x, using fallback", magic);
+		return -EINVAL;
+	}
+
+	LOG_INF("SFDP v%u.%u, %u parameter headers", hp->rev_major, hp->rev_minor, 1 + hp->nph);
+
+	/* Find and process BFP */
+	const struct jesd216_param_header *php = hp->phdr;
+	const struct jesd216_param_header *phpe = php + MIN(decl_nph, 1 + hp->nph);
+
+	while (php != phpe) {
+		uint16_t id = jesd216_param_id(php);
+		if (id == JESD216_SFDP_PARAM_ID_BFP) {
+			union {
+				uint32_t dw[20];
+				struct jesd216_bfp bfp;
+			} u_bfp;
+
+			ret = flash_read_sfdp(dev, jesd216_param_addr(php),
+					      (uint8_t *)u_bfp.dw, sizeof(u_bfp.dw));
+			if (ret < 0) {
+				LOG_WRN("BFP read failed: %d", ret);
+				return ret;
+			}
+
+			/* Extract density */
+			size_t flash_size = jesd216_bfp_density(&u_bfp.bfp) / 8U;
+			if (flash_size != cfg->flash_size) {
+				LOG_WRN("SFDP size %u differs from DT size %zu",
+					flash_size, cfg->flash_size);
+			}
+			LOG_INF("SFDP flash size: %u bytes (%u MiB)", flash_size, flash_size >> 20);
+
+			/* Extract erase types */
+			memset(data->caps.erase_types, 0, sizeof(data->caps.erase_types));
+			for (uint8_t ti = 1; ti <= JESD216_NUM_ERASE_TYPES; ++ti) {
+				struct jesd216_erase_type *etp = &data->caps.erase_types[ti - 1];
+				if (jesd216_bfp_erase(&u_bfp.bfp, ti, etp) == 0 && etp->cmd != 0) {
+					LOG_INF("Erase type %u: size=%lu, cmd=0x%02x",
+						ti, (unsigned long)BIT(etp->exp), etp->cmd);
+				}
+			}
+
+			/* Extract page size */
+			data->page_size = jesd216_bfp_page_size(php, &u_bfp.bfp);
+			LOG_INF("Page size: %u bytes", data->page_size);
+
+			/* Try quad output read (1-1-4) first, fallback to fast read */
+			struct jesd216_instr quad_instr;
+			if (jesd216_bfp_read_support(php, &u_bfp.bfp, JESD216_MODE_114, &quad_instr) > 0) {
+				LOG_INF("SFDP: Quad output (1-1-4) supported: cmd=0x%02x, wait=%u",
+					quad_instr.instr, quad_instr.wait_states);
+				data->caps.read_opcode = quad_instr.instr;
+				data->caps.read_opmode = QSPI_OPMODE_114;
+				data->caps.read_dummy_cycles = quad_instr.wait_states;
+			} else {
+				LOG_INF("SFDP: Using 1-1-1 fast read");
+				data->caps.read_opcode = CMD_FAST_READ;
+				data->caps.read_opmode = QSPI_OPMODE_111;
+				data->caps.read_dummy_cycles = 8;
+			}
+
+			/* Addressing mode */
+			uint8_t addr_mode = jesd216_bfp_addrbytes(&u_bfp.bfp);
+			if (addr_mode == JESD216_SFDP_BFP_DW1_ADDRBYTES_VAL_4B) {
+				data->caps.addr_bytes = 4;
+			} else if (flash_size > (16 * 1024 * 1024)) {
+				/* Need 4-byte for >16MB */
+				data->caps.addr_bytes = 4;
+			} else {
+				data->caps.addr_bytes = 3;
+			}
+
+			return 0;
+		}
+		++php;
+	}
+
+	LOG_WRN("No BFP in SFDP, using fallback");
+	return -ENOENT;
+}
+
+/* Detect and setup capabilities: SFDP → fallback */
+static int detect_and_setup_capabilities(const struct device *dev)
+{
+	const struct flash_artery_f435_qspi_config *cfg = dev->config;
+	struct flash_artery_f435_qspi_data *data = dev->data;
+	int ret;
+
+	/* Initialize defaults */
+	data->caps.busy_opcode = SPI_NOR_CMD_RDSR;
+	data->caps.busy_bit = W25Q_SR1_BUSY;
+	data->caps.prog_opcode = SPI_NOR_CMD_PP;
+	data->caps.prog_opmode = QSPI_OPMODE_111;
+	data->caps.reset_supported = true;
+
+	/* Apply DTS overrides first */
+	if (cfg->override_addr_bytes != 0) {
+		data->caps.addr_bytes = cfg->override_addr_bytes;
+		LOG_INF("DTS override: addr_bytes=%u", data->caps.addr_bytes);
+	}
+
+	/* Try SFDP if not disabled */
+	if (!cfg->disable_sfdp) {
+		ret = setup_caps_from_sfdp(dev);
+		if (ret == 0) {
+			LOG_INF("Capabilities configured from SFDP");
+			goto apply_overrides;
+		}
+	}
+
+	/* Fallback to conservative capabilities */
+	setup_fallback_caps(dev);
+
+apply_overrides:
+	/* Apply remaining DTS overrides */
+	if (cfg->override_read_opcode != 0) {
+		data->caps.read_opcode = cfg->override_read_opcode;
+		LOG_INF("DTS override: read_opcode=0x%02x", data->caps.read_opcode);
+	}
+	if (cfg->override_read_dummy != 0) {
+		data->caps.read_dummy_cycles = cfg->override_read_dummy;
+		LOG_INF("DTS override: read_dummy=%u", data->caps.read_dummy_cycles);
+	}
+
+	return 0;
+}
+
+/* Print comprehensive capability information for debugging */
+static void print_flash_capabilities(const struct device *dev)
+{
+	const struct flash_artery_f435_qspi_config *cfg = dev->config;
+	struct flash_artery_f435_qspi_data *data = dev->data;
+	const char *mode_str[] = {"111", "112", "114", "122", "144"};
+	const char *addr_str = data->caps.in_4b_mode ? "4B mode" : 
+			       data->caps.supports_4b_opcodes ? "4B opcodes" : "3B";
+
+	LOG_DBG("=== Flash Capabilities ===");
+	LOG_DBG("Read: 0x%02x mode=%s dummy=%u | Prog: 0x%02x mode=%s",
+		data->caps.read_opcode, mode_str[data->caps.read_opmode], data->caps.read_dummy_cycles,
+		data->caps.prog_opcode, mode_str[data->caps.prog_opmode]);
+	
+	LOG_DBG("Erase: ", "");
+	for (uint8_t i = 0; i < JESD216_NUM_ERASE_TYPES; i++) {
+		const struct jesd216_erase_type *etp = &data->caps.erase_types[i];
+		if (etp->cmd != 0 && etp->exp != 0) {
+			LOG_DBG("  0x%02x=%luKB", etp->cmd, (unsigned long)BIT(etp->exp) / 1024);
+		}
+	}
+	
+	LOG_DBG("Addr: %uB (%s) | Busy: 0x%02x/0x%02x | Quad: %c | Reset: %c | Size: %zuMB",
+		data->caps.addr_bytes, addr_str, data->caps.busy_opcode, data->caps.busy_bit,
+		data->caps.quad_enabled ? 'Y' : 'N', data->caps.reset_supported ? 'Y' : 'N',
+		cfg->flash_size / (1024 * 1024));
 }
 
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
-/* Setup flash page layout from SFDP erase types */
+/* Setup flash page layout from capabilities */
 static int setup_pages_layout(const struct device *dev)
 {
 	const struct flash_artery_f435_qspi_config *cfg = dev->config;
 	struct flash_artery_f435_qspi_data *data = dev->data;
-	uint32_t layout_page_size = data->page_size;
-	uint8_t exp = 0;
+	uint32_t min_erase_size = 0;
 
-	/* Find the smallest erase size */
-	for (size_t i = 0; i < ARRAY_SIZE(data->erase_types); ++i) {
-		const struct jesd216_erase_type *etp = &data->erase_types[i];
-
-		if ((etp->cmd != 0) && ((exp == 0) || (etp->exp < exp))) {
-			exp = etp->exp;
+	/* Find smallest erase size */
+	for (size_t i = 0; i < JESD216_NUM_ERASE_TYPES; ++i) {
+		const struct jesd216_erase_type *etp = &data->caps.erase_types[i];
+		if (etp->cmd != 0 && etp->exp != 0) {
+			uint32_t erase_size = BIT(etp->exp);
+			if (min_erase_size == 0 || erase_size < min_erase_size) {
+				min_erase_size = erase_size;
+			}
 		}
 	}
 
-	if (exp == 0) {
+	if (min_erase_size == 0) {
 		LOG_ERR("No valid erase types found");
 		return -ENOTSUP;
 	}
 
-	uint32_t erase_size = BIT(exp);
-
-	/* Align layout page size with erase size */
-	if ((layout_page_size % erase_size) != 0) {
-		LOG_DBG("Layout page %u not compatible with erase size %u",
-			layout_page_size, erase_size);
-		layout_page_size = erase_size;
-	}
-
-	if ((cfg->flash_size % layout_page_size) != 0) {
-		LOG_WRN("Layout page %u wastes space with device size %zu",
-			layout_page_size, cfg->flash_size);
-	}
-
-	data->layout.pages_size = layout_page_size;
-	data->layout.pages_count = cfg->flash_size / layout_page_size;
-
-	LOG_INF("Flash layout: %u pages x %u bytes", data->layout.pages_count,
-		data->layout.pages_size);
+	data->layout.pages_size = min_erase_size;
+	data->layout.pages_count = cfg->flash_size / min_erase_size;
+	LOG_INF("Flash layout: %u pages x %u bytes", data->layout.pages_count, data->layout.pages_size);
 
 	return 0;
 }
 #endif /* CONFIG_FLASH_PAGE_LAYOUT */
 
-/* Process JEDEC216 Basic Flash Parameter table */
-static int process_bfp(const struct device *dev,
-		       const struct jesd216_param_header *php,
-		       const struct jesd216_bfp *bfp)
-{
-	const struct flash_artery_f435_qspi_config *cfg = dev->config;
-	struct flash_artery_f435_qspi_data *data = dev->data;
-	const size_t flash_size = jesd216_bfp_density(bfp) / 8U;
-	int rc = 0;
-
-	if (flash_size != cfg->flash_size) {
-		LOG_WRN("SFDP flash size %u differs from DT size %zu",
-			flash_size, cfg->flash_size);
-	}
-
-	LOG_INF("Flash size: %u bytes (%u MiB)", flash_size, flash_size >> 20);
-
-	/* Copy erase types */
-	memset(data->erase_types, 0, sizeof(data->erase_types));
-	for (uint8_t ti = 1; ti <= ARRAY_SIZE(data->erase_types); ++ti) {
-		struct jesd216_erase_type *etp = &data->erase_types[ti - 1];
-
-		if (jesd216_bfp_erase(bfp, ti, etp) == 0) {
-			LOG_DBG("Erase type %u: size=%u, cmd=0x%02x",
-				ti, BIT(etp->exp), etp->cmd);
-		}
-	}
-
-	/* Get page size */
-	data->page_size = jesd216_bfp_page_size(php, bfp);
-	LOG_INF("Page size: %u bytes", data->page_size);
-
-	/* Check addressing mode */
-	uint8_t addr_mode = jesd216_bfp_addrbytes(bfp);
-
-	if (addr_mode == JESD216_SFDP_BFP_DW1_ADDRBYTES_VAL_3B) {
-		LOG_INF("Flash uses 3-byte addressing");
-		data->flag_access_32bit = false;
-	} else if (addr_mode == JESD216_SFDP_BFP_DW1_ADDRBYTES_VAL_4B) {
-		LOG_INF("Flash uses 4-byte addressing");
-		data->flag_access_32bit = true;
-	} else if (addr_mode == JESD216_SFDP_BFP_DW1_ADDRBYTES_VAL_3B4B) {
-		LOG_INF("Flash supports both 3B and 4B addressing, using 3B");
-		data->flag_access_32bit = false;
-		/* Could add logic here to enable 4B mode if needed */
-	}
-
-	/* Check for quad I/O support via SFDP */
-	struct jesd216_instr quad_instr;
-
-	rc = jesd216_bfp_read_support(php, bfp, JESD216_MODE_144, &quad_instr);
-	if (rc > 0) {
-		LOG_INF("SFDP: Quad I/O (1-4-4) supported: cmd=0x%02x, wait_states=%u",
-			quad_instr.instr, quad_instr.wait_states);
-
-		/* Quad mode should already be enabled in init, just record the parameters */
-		data->flag_quad_io_en = true;
-		data->qspi_read_cmd = quad_instr.instr;
-		data->qspi_read_cmd_latency = quad_instr.wait_states;
-		if (quad_instr.mode_clocks) {
-			data->qspi_read_cmd_latency += quad_instr.mode_clocks;
-		}
-	} else {
-		LOG_INF("SFDP: Quad I/O not indicated, using standard SPI");
-	}
-
-	return 0;
-}
 
 /* Initialize the QSPI peripheral hardware */
 static void qspi_hw_init(const struct flash_artery_f435_qspi_config *cfg)
 {
-	uint32_t crm_ahben2, ctrl;
+	uint32_t ctrl, timeout;
 
 	LOG_DBG("QSPI hardware initialization at base 0x%08x", cfg->reg_base);
 
-	/* Enable QSPI1 clock via CRM (direct register access) */
-	crm_ahben2 = sys_read32(CRM_BASE + CRM_AHBEN3_OFFSET);
-	LOG_DBG("CRM_AHBEN3 before: 0x%08x", crm_ahben2);
-	crm_ahben2 |= CRM_AHBEN3_QSPI1EN;
-	sys_write32(crm_ahben2, CRM_BASE + CRM_AHBEN3_OFFSET);
-	crm_ahben2 = sys_read32(CRM_BASE + CRM_AHBEN3_OFFSET);
-	LOG_DBG("CRM_AHBEN3 after: 0x%08x", crm_ahben2);
-
-	/* NOTE: Old driver does NOT reset QSPI peripheral - skip reset to match working driver */
-	
-	/* Small delay after clock enable */
+	/* Enable QSPI1 clock via CRM */
+	uint32_t crm_ahben2 = sys_read32(CRM_BASE + CRM_AHBEN3_OFFSET);
+	sys_write32(crm_ahben2 | CRM_AHBEN3_QSPI1EN, CRM_BASE + CRM_AHBEN3_OFFSET);
 	k_busy_wait(100);
 
-	/* Read initial control register */
+	/* XIP disable sequence - ensure peripheral is in known state */
 	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET);
 	LOG_DBG("QSPI_CTRL initial: 0x%08x", ctrl);
-
-	/* CRITICAL FIX: ALWAYS run XIP disable sequence to properly reset/initialize peripheral
-	 * The SDK qspi_xip_enable(FALSE) only skips if already disabled, but we need to
-	 * ensure peripheral is in known state even if bootloader left it configured */
-	LOG_DBG("Performing XIP disable sequence (XIPSEL=%d)", !!(ctrl & QSPI_CTRL_XIPSEL));
 	
-	/* Wait for TX FIFO empty (bit 0 of FIFOSTS means ready/empty) */
-	uint32_t timeout = 10000;
+	/* Wait for TX FIFO empty */
+	timeout = 10000;
 	while (!(qspi_read_reg(cfg, QSPI_FIFOSTS_OFFSET) & QSPI_FIFOSTS_TXFIFORDY) && timeout--) {
 		k_busy_wait(1);
 	}
-	if (timeout == 0) {
-		LOG_WRN("TX FIFO wait timeout");
-	}
-
-	/* Small delay for IO transmission - per SDK */
 	k_busy_wait(10);
 
 	/* Flush and reset QSPI state */
-	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET);
-	ctrl |= QSPI_CTRL_XIPRCMDF;
+	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET) | QSPI_CTRL_XIPRCMDF;
 	qspi_write_reg(cfg, QSPI_CTRL_OFFSET, ctrl);
-	LOG_DBG("Set XIPRCMDF, CTRL=0x%08x", ctrl);
 
 	/* Wait for abort bit to clear */
 	timeout = 10000;
 	while ((qspi_read_reg(cfg, QSPI_CTRL_OFFSET) & QSPI_CTRL_ABORT) && timeout--) {
 		k_busy_wait(1);
 	}
-	if (timeout == 0) {
-		LOG_WRN("ABORT clear timeout");
-	}
-
-	/* Small delay - per SDK */
 	k_busy_wait(10);
 
-	/* Now ensure XIP mode is disabled */
-	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET);
-	ctrl &= ~QSPI_CTRL_XIPSEL;
+	/* Disable XIP mode */
+	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET) & ~QSPI_CTRL_XIPSEL;
 	qspi_write_reg(cfg, QSPI_CTRL_OFFSET, ctrl);
-	LOG_DBG("Cleared XIPSEL, CTRL=0x%08x", ctrl);
 
-	/* Wait for abort bit to clear again */
+	/* Wait for abort to clear again */
 	timeout = 10000;
 	while ((qspi_read_reg(cfg, QSPI_CTRL_OFFSET) & QSPI_CTRL_ABORT) && timeout--) {
 		k_busy_wait(1);
 	}
-	if (timeout == 0) {
-		LOG_WRN("ABORT clear timeout 2");
-	}
-
-	/* Small delay */
 	k_busy_wait(10);
-	
-	/* Re-read control register to get current state */
-	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET);
-	LOG_DBG("XIP disable complete, CTRL=0x%08x", ctrl);
 
-	/* CRITICAL: Assert ABORT to reset command engine and flush FIFOs
-	 * This is REQUIRED after XIP disable and before first command per RM */
-	LOG_DBG("Asserting ABORT to reset command engine");
-	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET);
-	ctrl |= QSPI_CTRL_ABORT;
+	/* Assert ABORT to reset command engine */
+	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET) | QSPI_CTRL_ABORT;
 	qspi_write_reg(cfg, QSPI_CTRL_OFFSET, ctrl);
 	
-	/* Wait for ABORT to auto-clear */
 	timeout = 10000;
 	while ((qspi_read_reg(cfg, QSPI_CTRL_OFFSET) & QSPI_CTRL_ABORT) && timeout--) {
 		k_busy_wait(1);
 	}
-	if (timeout == 0) {
-		LOG_ERR("ABORT clear timeout after XIP disable");
-		return;
-	}
-	
-	/* Small delay after ABORT completes */
 	k_busy_wait(10);
 	
 	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET);
-	LOG_DBG("ABORT complete, CTRL=0x%08x", ctrl);
+	LOG_DBG("XIP disable and ABORT complete, CTRL=0x%08x", ctrl);
 
-	/* Set clock divider (div by 8 to match old driver: 240MHz / 8 = 30MHz) */
-	ctrl &= ~QSPI_CTRL_CLKDIV_MASK;
-	ctrl |= (QSPI_CLK_DIV_8 << QSPI_CTRL_CLKDIV_POS);
-
-	/* Don't modify SCK mode - leave at hardware reset value (mode 0) */
-
-	/* Set busy bit offset (bit 0 in status register for W25Q512JV) */
-	ctrl &= ~QSPI_CTRL_BUSY_MASK;
-	ctrl |= (0 << QSPI_CTRL_BUSY_POS);
-
-	/* Write final control register configuration */
+	/* Configure control register: clock divider (div 8 = 30MHz) and busy bit offset */
+	ctrl = (ctrl & ~(QSPI_CTRL_CLKDIV_MASK | QSPI_CTRL_BUSY_MASK)) |
+	       (QSPI_CLK_DIV_8 << QSPI_CTRL_CLKDIV_POS);
 	qspi_write_reg(cfg, QSPI_CTRL_OFFSET, ctrl);
-	ctrl = qspi_read_reg(cfg, QSPI_CTRL_OFFSET);
-	LOG_DBG("QSPI_CTRL configured: 0x%08x", ctrl);
 
 	/* Clear any pending command status */
-	uint32_t cmdsts = qspi_read_reg(cfg, QSPI_CMDSTS_OFFSET);
-	if (cmdsts & QSPI_CMDSTS_CMDSTS) {
-		LOG_DBG("Clearing pending CMDSTS");
+	if (qspi_read_reg(cfg, QSPI_CMDSTS_OFFSET) & QSPI_CMDSTS_CMDSTS) {
 		qspi_write_reg(cfg, QSPI_CMDSTS_OFFSET, QSPI_CMDSTS_CMDSTS);
 	}
 
-	/* Read and log all relevant status registers */
-	LOG_DBG("Init complete - Register dump:");
-	LOG_DBG("  CTRL:    0x%08x", qspi_read_reg(cfg, QSPI_CTRL_OFFSET));
-	LOG_DBG("  CTRL2:   0x%08x", qspi_read_reg(cfg, QSPI_CTRL2_OFFSET));
-	LOG_DBG("  FIFOSTS: 0x%08x", qspi_read_reg(cfg, QSPI_FIFOSTS_OFFSET));
-	LOG_DBG("  CMDSTS:  0x%08x", qspi_read_reg(cfg, QSPI_CMDSTS_OFFSET));
-	LOG_DBG("  RSTS:    0x%08x", qspi_read_reg(cfg, QSPI_RSTS_OFFSET));
+	LOG_DBG("Init complete - CTRL: 0x%08x", qspi_read_reg(cfg, QSPI_CTRL_OFFSET));
 }
 
 /* Driver initialization - Follows W25Q512JV datasheet checklist */
@@ -1385,46 +1318,32 @@ static int flash_artery_f435_qspi_init(const struct device *dev)
 	uint8_t sr1, sr2, sr3;
 	int ret;
 
-	/* Initialize semaphores */
+	/* Initialize semaphore */
 	k_sem_init(&data->sem, 1, 1);
-	k_sem_init(&data->sync, 1, 1);
 
 	/* Initialize data structure */
 	data->page_size = SPI_NOR_PAGE_SIZE;
-	data->flag_access_32bit = false;
-	data->flag_quad_io_en = false;
+	memset(&data->caps, 0, sizeof(data->caps));
 
 	qspi_hw_init(cfg);
 
 	/* Configure pinctrl AFTER QSPI clock is enabled */
-	ret = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT);
-	if (ret < 0) {
+	if ((ret = pinctrl_apply_state(cfg->pcfg, PINCTRL_STATE_DEFAULT)) < 0) {
 		LOG_ERR("Failed to apply pinctrl state: %d", ret);
 		return ret;
 	}
 
-	/*
-	 * Power-up constraints (W25Q512JV datasheet):
-	 * - /CS must track VCC during ramp
-	 * - tVSL (VCC min to /CS low): 20µs min
-	 * - tPUW (power-up to write enable): 5ms min
-	 *
-	 * Assume bootloader/hardware has satisfied these, but add delay to be safe
-	 */
+	/* Power-up delay for W25Q512JV (tVSL: 20µs min, tPUW: 5ms min) */
 	k_sleep(K_MSEC(10));
+	LOG_INF("Initializing QSPI NOR flash: %s", dev->name);
 
-	LOG_INF("Initializing W25Q512JV QSPI NOR flash: %s", dev->name);
-
-	/* Step 1: Software reset to ensure known state (optional but recommended) */
-	ret = w25q_software_reset(dev);
-	if (ret < 0) {
-		LOG_WRN("Software reset failed: %d (continuing anyway)", ret);
-		/* Continue anyway - device might be in a working state */
+	/* Step 1: Software reset to recover from stuck states (optional) */
+	if ((ret = flash_software_reset(dev)) < 0) {
+		LOG_DBG("Software reset failed: %d (continuing)", ret);
 	}
 
 	/* Step 2: Read and validate JEDEC ID */
-	ret = flash_artery_f435_qspi_read_jedec_id(dev, jedec_id, sizeof(jedec_id));
-	if (ret < 0) {
+	if ((ret = flash_artery_f435_qspi_read_jedec_id(dev, jedec_id, sizeof(jedec_id))) < 0) {
 		LOG_ERR("Failed to read JEDEC ID: %d", ret);
 		return ret;
 	}
@@ -1433,136 +1352,79 @@ static int flash_artery_f435_qspi_init(const struct device *dev)
 
 	/* Validate JEDEC ID for W25Q512JV */
 	if (jedec_id[0] != W25Q512_JEDEC_MFR) {
-		LOG_ERR("Unexpected manufacturer ID: 0x%02x (expected 0x%02x)",
-			jedec_id[0], W25Q512_JEDEC_MFR);
+		LOG_ERR("Unexpected manufacturer ID: 0x%02x (expected 0x%02x)", jedec_id[0], W25Q512_JEDEC_MFR);
 		return -ENODEV;
 	}
 	if (jedec_id[1] != W25Q512_JEDEC_TYPE || jedec_id[2] != W25Q512_JEDEC_CAPACITY) {
 		LOG_WRN("JEDEC ID type/capacity: %02x %02x (expected %02x %02x)",
-			jedec_id[1], jedec_id[2], 
-			W25Q512_JEDEC_TYPE, W25Q512_JEDEC_CAPACITY);
+			jedec_id[1], jedec_id[2], W25Q512_JEDEC_TYPE, W25Q512_JEDEC_CAPACITY);
 	}
 
 	/* Step 3: Read all status registers to check device state */
-	sr1 = qspi_read_sr1(dev);
-	sr2 = qspi_read_sr2(dev);
-	sr3 = qspi_read_sr3(dev);
-
+	if ((ret = qspi_read_sr1(dev, &sr1)) < 0 ||
+	    (ret = qspi_read_sr2(dev, &sr2)) < 0 ||
+	    (ret = qspi_read_sr3(dev, &sr3)) < 0) {
+		LOG_ERR("Failed to read status registers: %d", ret);
+		return ret;
+	}
 	LOG_INF("Status Registers: SR1=0x%02x SR2=0x%02x SR3=0x%02x", sr1, sr2, sr3);
 
-	/* Check if device is busy */
-	if (sr1 & W25Q_SR1_BUSY) {
-		LOG_WRN("Device busy after reset - waiting");
-		ret = qspi_flash_wait_ready(dev, 1000);
-		if (ret < 0) {
-			LOG_ERR("Device stuck busy");
-			return ret;
-		}
+	if ((sr1 & W25Q_SR1_BUSY) && (ret = qspi_flash_wait_ready(dev, 1000)) < 0) {
+		LOG_ERR("Device stuck busy");
+		return ret;
 	}
 
-	/* Step 4: Check Write Protect Selection (WPS) and unlock if needed */
+	/* Detect capabilities from SFDP or use fallbacks */
+	if ((ret = detect_and_setup_capabilities(dev)) < 0) {
+		LOG_ERR("Failed to detect capabilities: %d", ret);
+		return ret;
+	}
+
+	/* Print detected capabilities for debugging */
+	print_flash_capabilities(dev);
+
+	/* Try global unlock (Winbond-specific, non-fatal) */
 	if (sr3 & W25Q_SR3_WPS) {
-		LOG_INF("Individual Block Lock mode (WPS=1) - performing global unlock");
-		ret = w25q_global_unlock(dev);
-		if (ret < 0) {
-			LOG_ERR("Global unlock failed: %d", ret);
+		flash_global_unlock(dev);
+	}
+
+	/* Try to enable quad mode if read command needs it */
+	if (data->caps.read_opmode == QSPI_OPMODE_114 || data->caps.read_opmode == QSPI_OPMODE_144) {
+		if ((ret = flash_enable_quad(dev)) < 0) {
+			LOG_WRN("Quad enable failed: %d, falling back to 1-1-1", ret);
+			/* Fall back to 1-1-1 fast read */
+			data->caps.read_opcode = CMD_FAST_READ;
+			data->caps.read_opmode = QSPI_OPMODE_111;
+			data->caps.read_dummy_cycles = 8;
+			data->caps.quad_enabled = false;
+		}
+	}
+
+	/* Update program opcode based on quad status */
+	if (data->caps.quad_enabled) {
+		data->caps.prog_opcode = CMD_QUAD_PAGE_PROGRAM;
+		data->caps.prog_opmode = QSPI_OPMODE_114;
+		LOG_INF("Quad enabled: using 0x32 program");
+	}
+
+	/* Enter 4-byte mode if needed (>16MB flash) */
+	if (data->caps.addr_bytes == 4 && !data->caps.in_4b_mode) {
+		if ((ret = flash_enter_4byte_mode(dev)) < 0) {
+			LOG_ERR("Failed to enter 4-byte mode: %d", ret);
 			return ret;
 		}
-	} else {
-		LOG_INF("Standard write protection mode (WPS=0)");
-	}
-
-	/* Step 5: Enable Quad mode (set QE bit) if not already set */
-	ret = w25q_enable_quad_mode(dev);
-	if (ret < 0) {
-		LOG_ERR("Failed to enable quad mode: %d", ret);
-		return ret;
-	}
-
-	/* Step 6: Check if flash is already in 4-byte address mode
-	 * W25Q512JV can be configured for power-up 4B mode via OTP or previous commands */
-	sr3 = qspi_read_sr3(dev);
-	if (sr3 & W25Q_SR3_ADS) {
-		LOG_INF("Flash already in 4-byte address mode (ADS=1)");
-		data->flag_access_32bit = true;
-	} else {
-		LOG_INF("Flash in 3-byte address mode (ADS=0) - will use 3-byte addressing");
-		data->flag_access_32bit = false;
-		/* TODO: Implement Extended Address Register support for accessing >16MB
-		 * For now, 3-byte addressing works fine for the first 16MB */
-	}
-
-	/* Step 7: Configure read parameters (dummy cycles) for optimal performance
-	 * NOTE: Skipping for now as it may not be necessary and adds complexity */
-	LOG_INF("Using default read parameters from flash power-on config");
-
-	/* Read and process SFDP */
-	const uint8_t decl_nph = 3;
-	union {
-		uint8_t raw[JESD216_SFDP_SIZE(decl_nph)];
-		struct jesd216_sfdp_header sfdp;
-	} u;
-	const struct jesd216_sfdp_header *hp = &u.sfdp;
-
-	ret = flash_artery_f435_qspi_read_sfdp(dev, 0, u.raw, sizeof(u.raw));
-	if (ret < 0) {
-		LOG_ERR("Failed to read SFDP header: %d", ret);
-		return ret;
-	}
-
-	uint32_t magic = jesd216_sfdp_magic(hp);
-	if (magic != JESD216_SFDP_MAGIC) {
-		LOG_ERR("Invalid SFDP magic: 0x%08x", magic);
-		return -EINVAL;
-	}
-
-	LOG_INF("SFDP v%u.%u, %u parameter headers", hp->rev_major, hp->rev_minor,
-		1 + hp->nph);
-
-	/* Process parameter headers */
-	const struct jesd216_param_header *php = hp->phdr;
-	const struct jesd216_param_header *phpe = php + MIN(decl_nph, 1 + hp->nph);
-
-	while (php != phpe) {
-		uint16_t id = jesd216_param_id(php);
-
-		LOG_DBG("Parameter header %u: id=0x%04x, rev=%u.%u, len=%u DW, addr=0x%x",
-			(uint32_t)(php - hp->phdr), id, php->rev_major, php->rev_minor,
-			php->len_dw, jesd216_param_addr(php));
-
-		if (id == JESD216_SFDP_PARAM_ID_BFP) {
-			union {
-				uint32_t dw[20];
-				struct jesd216_bfp bfp;
-			} u_bfp;
-
-			ret = flash_artery_f435_qspi_read_sfdp(dev, jesd216_param_addr(php),
-							       (uint8_t *)u_bfp.dw,
-							       sizeof(u_bfp.dw));
-			if (ret < 0) {
-				LOG_ERR("Failed to read BFP: %d", ret);
-				return ret;
-			}
-
-			ret = process_bfp(dev, php, &u_bfp.bfp);
-			if (ret < 0) {
-				LOG_ERR("Failed to process BFP: %d", ret);
-				return ret;
-			}
-		}
-
-		++php;
 	}
 
 #if defined(CONFIG_FLASH_PAGE_LAYOUT)
-	/* Setup page layout */
-	ret = setup_pages_layout(dev);
-	if (ret < 0) {
+	/* Setup page layout from capabilities */
+	if ((ret = setup_pages_layout(dev)) < 0) {
 		LOG_ERR("Failed to setup page layout: %d", ret);
 		return ret;
 	}
 #endif
 
+	LOG_INF("QSPI NOR flash initialization complete - %zu bytes accessible",
+		cfg->flash_size);
 	return 0;
 }
 
@@ -1578,6 +1440,12 @@ static const struct flash_artery_f435_qspi_config flash_artery_f435_qspi_cfg = {
 	.pcfg = PINCTRL_DT_DEV_CONFIG_GET(QSPI_CONTROLLER_NODE),
 	.max_frequency = DT_INST_PROP(0, qspi_max_frequency),
 	.flash_size = DT_INST_PROP(0, size) / 8,  /* Convert bits to bytes */
+	
+	/* DTS overrides (0 = auto) */
+	.override_addr_bytes = DT_INST_PROP_OR(0, override_addr_bytes, 0),
+	.override_read_opcode = DT_INST_PROP_OR(0, override_read_opcode, 0),
+	.override_read_dummy = DT_INST_PROP_OR(0, override_read_dummy, 0),
+	.disable_sfdp = DT_INST_PROP_OR(0, disable_sfdp, false),
 };
 
 static struct flash_artery_f435_qspi_data flash_artery_f435_qspi_data;
