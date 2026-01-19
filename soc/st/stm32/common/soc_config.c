@@ -65,6 +65,8 @@ static int st_stm32_common_config(void)
 	LL_APB1_GRP2_EnableClock(LL_APB1_GRP2_PERIPH_DBGMCU);
 #elif defined(LL_APB2_GRP1_PERIPH_DBGMCU)
 	LL_APB2_GRP1_EnableClock(LL_APB2_GRP1_PERIPH_DBGMCU);
+#elif defined(LL_APB4_GRP1_PERIPH_DBGMCU)
+	LL_APB4_GRP1_EnableClock(LL_APB4_GRP1_PERIPH_DBGMCU);
 #endif /* LL_APB1_GRP1_PERIPH_DBGMCU */
 
 #if defined(CONFIG_STM32_ENABLE_DEBUG_SLEEP_STOP)
@@ -83,7 +85,9 @@ static int st_stm32_common_config(void)
 #elif defined(CONFIG_SOC_SERIES_STM32MP13X)
 	LL_DBGMCU_EnableDebugInLowPowerMode();
 #else /* all other parts */
+#if !defined(CONFIG_SOC_SERIES_STM32H5X)
 	LL_DBGMCU_EnableDBGStopMode();
+#endif
 #endif
 
 #else
@@ -103,7 +107,9 @@ static int st_stm32_common_config(void)
 #elif defined(CONFIG_SOC_SERIES_STM32MP13X)
 	LL_DBGMCU_DisableDebugInLowPowerMode();
 #else /* all other parts */
+#if !defined(CONFIG_SOC_SERIES_STM32H5X)
 	LL_DBGMCU_DisableDBGStopMode();
+#endif
 #endif
 
 #endif /* CONFIG_STM32_ENABLE_DEBUG_SLEEP_STOP */
@@ -115,6 +121,8 @@ static int st_stm32_common_config(void)
 	LL_APB1_GRP2_DisableClock(LL_APB1_GRP2_PERIPH_DBGMCU);
 #elif defined(LL_APB2_GRP1_PERIPH_DBGMCU)
 	LL_APB2_GRP1_DisableClock(LL_APB2_GRP1_PERIPH_DBGMCU);
+#elif defined(LL_APB4_GRP1_PERIPH_DBGMCU)
+	LL_APB4_GRP1_DisableClock(LL_APB4_GRP1_PERIPH_DBGMCU);
 #endif /* LL_APB1_GRP1_PERIPH_DBGMCU */
 
 	return 0;
