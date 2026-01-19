@@ -3,7 +3,8 @@
 
 config SOC_FAMILY_STM32
 	select HAS_SEGGER_RTT if ZEPHYR_SEGGER_MODULE
-	select STM32_ENABLE_DEBUG_SLEEP_STOP if ZTEST
+	# Disabled for STM32H5 - causes bus fault due to DBGMCU access restrictions
+	select STM32_ENABLE_DEBUG_SLEEP_STOP if (DEBUG || ZTEST) && !SOC_SERIES_STM32H5X
 	select BUILD_OUTPUT_HEX
 
 if SOC_FAMILY_STM32
