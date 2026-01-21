@@ -528,6 +528,7 @@ MODEM_CHAT_MATCH_DEFINE(ccid_match __maybe_unused, "+CCID: ", "", modem_cellular
 MODEM_CHAT_MATCH_DEFINE(cimi_match __maybe_unused, "", "", modem_cellular_chat_on_imsi);
 MODEM_CHAT_MATCH_DEFINE(cgmi_match __maybe_unused, "", "", modem_cellular_chat_on_cgmi);
 MODEM_CHAT_MATCH_DEFINE(cgmr_match __maybe_unused, "", "", modem_cellular_chat_on_cgmr);
+MODEM_CHAT_MATCH_DEFINE(usbnet_match __maybe_unused, "+QCFG: \"usbnet\",", "", NULL);
 
 MODEM_CHAT_MATCHES_DEFINE(__maybe_unused unsol_matches,
 			  MODEM_CHAT_MATCH("+CREG: ", ",", modem_cellular_chat_on_cxreg),
@@ -597,6 +598,11 @@ static void modem_cellular_build_apn_script(struct modem_cellular_data *data)
 	/* Vendor‑specific extras */
 #if DT_HAS_COMPAT_STATUS_OKAY(swir_hl7800)
 	append_apn_cmd(data, &steps, "AT+KCNXCFG=1,\"GPRS\",\"%s\",,,\"IPV4\"", apn_value);
+#endif
+
+#if DT_HAS_COMPAT_STATUS_OKAY(quectel_eg800q)
+	/* Second PDP context for CV connection over USB (ECM mode) */
+	append_apn_cmd(data, &steps, "AT+CGDCONT=2,\"IP\",\"%s\"", "voi.stage.tele2.com");
 #endif
 
 	/* Glue the array into the script object */
@@ -2497,18 +2503,34 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_init_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CIMI", cimi_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
+				  MODEM_CHAT_SCRIPT_CMD_RESP("AT+QCFG=\"usbnet\",1", ok_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CMUX=0,0,5,127", ok_match));
+
+// MODEM_CHAT_SCRIPT_CMD_RESP("AT+QCFG=\"usbnet\"?", usbnet_match),
 
 MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_init_chat_script, quectel_eg800q_init_chat_script_cmds,
 			 abort_matches, modem_cellular_chat_callback_handler, 30);
 
 MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_dial_chat_script_cmds,
+			      /* Deactivate context 1 to reset state */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=0,1", allow_match),
+				  /* Deactivate context 2 to reset state */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=0,2", allow_match),
+			      /* Set full phone functionality */
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CFUN=1", ok_match),
-			      /* this at command is required as a small delay before performing
-			       * dialing, otherwise we get 'NO CARRIER' and abort
-			       */
+			      /* Small delay before activation */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_NONE("AT", 500),
+			      /* Activate PDP context 1 for IoT platform */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=1,1", allow_match),
+			      /* Activate PDP context 2 for CV USB connection (ECM mode) */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=1,2", allow_match),
+			      /* Connect USB Netcard to Network for context 2 - ECM over USB, not PPP */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QNETDEVCTL=1,2,1", allow_match),
+			      /* Check network status - both contexts should have IP addresses */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGPADDR", allow_match),
+			      /* Small delay before dialing context 1 */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_NONE("AT", 500),
+			      /* Dial context 1 for IoT platform (PPP over serial) */
 			      MODEM_CHAT_SCRIPT_CMD_RESP("ATD*99***1#", connect_match),);
 
 MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_dial_chat_script, quectel_eg800q_dial_chat_script_cmds,
