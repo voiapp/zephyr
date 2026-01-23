@@ -2477,8 +2477,10 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_init_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CFUN?", ok_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CFUN=4", ok_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CMEE=1", ok_match),
+			      /* Enable network registration URCs per PPP Application Note */
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CREG=1", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CGREG=1", ok_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CEREG=1", ok_match),
-			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CEREG?", ok_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CGSN", imei_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CGMM", cgmm_match),
@@ -2489,35 +2491,49 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_init_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CIMI", cimi_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
-				  MODEM_CHAT_SCRIPT_CMD_RESP("AT+QCFG=\"usbnet\",1", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+QCCID", qccid_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
+			      /* Query current USB net mode */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QCFG=\"usbnet\"", allow_match),
+				  /* Set USB net mode to ECM=1 */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QCFG=\"usbnet\",1", allow_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QCFG=\"nat\",1", allow_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CMUX=0,0,5,127", ok_match));
-
-// MODEM_CHAT_SCRIPT_CMD_RESP("AT+QCFG=\"usbnet\"?", usbnet_match),
 
 MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_init_chat_script, quectel_eg800q_init_chat_script_cmds,
 			 abort_matches, modem_cellular_chat_callback_handler, 30);
 
 MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_dial_chat_script_cmds,
-			      /* Deactivate context 1 to reset state */
+			      /* PPP Application Note: Check SIM readiness before dialing */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CPIN?", allow_match),
+			      /* PPP Application Note: Check network registration (CS and PS) */
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CREG?", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CGREG?", ok_match),
+			      /* Deactivate contexts to reset state */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=0,1", allow_match),
-				  /* Deactivate context 2 to reset state */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=0,2", allow_match),
 			      /* Set full phone functionality */
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CFUN=1", ok_match),
-			      /* Small delay before activation */
+			      /* Small delay after CFUN */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_NONE("AT", 500),
-			      /* Activate PDP context 1 for IoT platform */
+			      /* Activate PDP context 1 for IoT platform PPP (m2m.tele2.com) */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=1,1", allow_match),
-			      /* Activate PDP context 2 for CV USB connection (ECM mode) */
+			      /* Activate PDP context 2 for CV USB ECM (voi.stage.tele2.com) */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=1,2", allow_match),
-			      /* Connect USB Netcard to Network for context 2 - ECM over USB, not PPP */
+			      /* AT Commands Manual: Verify PDP context activation status */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT?", allow_match),
+			      /* AT Commands Manual: Query QNETDEVCTL capabilities */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QNETDEVCTL=?", allow_match),
+			      /* AT Commands Manual: Connect USB netcard to network (CID 2, enable URC) */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QNETDEVCTL=1,2,1", allow_match),
-			      /* Check network status - both contexts should have IP addresses */
+			      /* AT Commands Manual: Verify USB netcard connection state (expect state=1) */
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QNETDEVCTL?", allow_match),
+			      /* AT Commands Manual: Query IP addresses for all contexts */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGPADDR", allow_match),
-			      /* Small delay before dialing context 1 */
+			      /* Small delay before dialing PPP */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_NONE("AT", 500),
-			      /* Dial context 1 for IoT platform (PPP over serial) */
-			      MODEM_CHAT_SCRIPT_CMD_RESP("ATD*99***1#", connect_match),);
+			      /* PPP Application Note: Dial PPP with ATD*99# (uses context 1) */
+			      MODEM_CHAT_SCRIPT_CMD_RESP("ATD*99#", connect_match),);
 
 MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_dial_chat_script, quectel_eg800q_dial_chat_script_cmds,
 			 dial_abort_matches, modem_cellular_chat_callback_handler, 10);
