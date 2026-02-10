@@ -44,7 +44,7 @@ int can_mcan_write_reg(const struct device *dev, uint16_t reg, uint32_t val)
 	return err;
 }
 
-static int can_mcan_exit_sleep_mode(const struct device *dev)
+int can_mcan_exit_sleep_mode(const struct device *dev)
 {
 	struct can_mcan_data *data = dev->data;
 	uint32_t start_time;
@@ -97,7 +97,7 @@ unlock:
 	return err;
 }
 
-static int can_mcan_enter_sleep_mode(const struct device *dev)
+int can_mcan_enter_sleep_mode(const struct device *dev)
 {
 	struct can_mcan_data *data = dev->data;
 	uint32_t start_time;
@@ -149,7 +149,7 @@ unlock:
 	return err;
 }
 
-static int can_mcan_is_sleep_mode(const struct device *dev)
+int can_mcan_is_sleep_mode(const struct device *dev)
 {
 	struct can_mcan_data *data = dev->data;
 	uint32_t cccr;
