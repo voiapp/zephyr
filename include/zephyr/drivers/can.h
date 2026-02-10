@@ -506,6 +506,27 @@ typedef int (*can_get_core_clock_t)(const struct device *dev, uint32_t *rate);
  */
 typedef int (*can_get_max_filters_t)(const struct device *dev, bool ide);
 
+/**
+ * @typedef can_enter_sleep_mode_t
+ * @brief Callback API upon entering sleep mode
+ * See @a can_enter_sleep_mode() for argument description
+ */
+typedef int (*can_enter_sleep_mode_t)(const struct device *dev);
+
+/**
+ * @typedef can_exit_sleep_mode_t
+ * @brief Callback API upon exiting sleep mode
+ * See @a can_exit_sleep_mode() for argument description
+ */
+typedef int (*can_exit_sleep_mode_t)(const struct device *dev);
+
+/**
+ * @typedef can_is_sleep_mode_t
+ * @brief Callback API upon checking sleep mode
+ * See @a can_is_sleep_mode() for argument description
+ */
+typedef int (*can_is_sleep_mode_t)(const struct device *dev);
+
 __subsystem struct can_driver_api {
 	can_get_capabilities_t get_capabilities;
 	can_start_t start;
@@ -533,6 +554,9 @@ __subsystem struct can_driver_api {
 	/* Max values for the timing registers during the data phase */
 	struct can_timing timing_data_max;
 #endif /* CONFIG_CAN_FD_MODE */
+	can_enter_sleep_mode_t enter_sleep_mode;
+	can_exit_sleep_mode_t exit_sleep_mode;
+	can_is_sleep_mode_t is_sleep_mode;
 };
 
 /** @endcond */
@@ -1739,6 +1763,75 @@ static inline bool can_frame_matches_filter(const struct can_frame *frame,
 	}
 
 	return true;
+}
+
+/**
+ * @brief Enter sleep mode
+ *
+ * Put CAN controller to sleep mode
+ *
+ * @param dev       Pointer to the device structure for the driver instance.
+ *
+ * @retval 0 If successful.
+ * @retval -EINVAL If the API is not supported.
+ * @retval -EAGAIN If entering sleep mode timed out.
+ * @retval Errno Other negative errno on failure.
+ */
+static inline int can_enter_sleep_mode(const struct device *dev)
+{
+	const struct can_driver_api *api = (const struct can_driver_api *)dev->api;
+
+	if (api->enter_sleep_mode != NULL) {
+		return api->enter_sleep_mode(dev);
+	}
+
+	return -EINVAL;
+}
+
+/**
+ * @brief Exit sleep mode
+ *
+ * Exit sleep mode on the CAN controller
+ *
+ * @param dev       Pointer to the device structure for the driver instance.
+ *
+ * @retval 0 If successful.
+ * @retval -EINVAL If the API is not supported.
+ * @retval -EAGAIN If exiting sleep mode timed out.
+ * @retval Errno Other negative errno on failure.
+ */
+static inline int can_exit_sleep_mode(const struct device *dev)
+{
+	const struct can_driver_api *api = (const struct can_driver_api *)dev->api;
+
+	if (api->exit_sleep_mode != NULL) {
+		return api->exit_sleep_mode(dev);
+	}
+
+	return -EINVAL;
+}
+
+/**
+ * @brief Check if sleep mode
+ *
+ * Check if CAN controller is in sleep mode.
+ *
+ * @param dev       Pointer to the device structure for the driver instance.
+ *
+ * @retval 1 If in sleep mode.
+ * @retval 0 If not in sleep mode.
+ * @retval -EINVAL If the API is not supported.
+ * @retval Errno Other negative errno on failure.
+ */
+static inline int can_is_sleep_mode(const struct device *dev)
+{
+	const struct can_driver_api *api = (const struct can_driver_api *)dev->api;
+
+	if (api->is_sleep_mode != NULL) {
+		return api->is_sleep_mode(dev);
+	}
+
+	return -EINVAL;
 }
 
 /** @} */

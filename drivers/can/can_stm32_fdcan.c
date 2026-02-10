@@ -11,6 +11,7 @@
 #include <zephyr/drivers/clock_control.h>
 #include <zephyr/drivers/pinctrl.h>
 #include <zephyr/kernel.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/sys/__assert.h>
 #include <soc.h>
 #include <zephyr/logging/log.h>
@@ -523,6 +524,21 @@ static int can_stm32fd_init(const struct device *dev)
 	return ret;
 }
 
+static int can_stm32fd_enter_sleep_mode(const struct device *dev)
+{
+	return can_mcan_enter_sleep_mode(dev);
+}
+
+static int can_stm32fd_exit_sleep_mode(const struct device *dev)
+{
+	return can_mcan_exit_sleep_mode(dev);
+}
+
+static int can_stm32fd_is_sleep_mode(const struct device *dev)
+{
+	return can_mcan_is_sleep_mode(dev);
+}
+
 static DEVICE_API(can, can_stm32fd_driver_api) = {
 	.get_capabilities = can_mcan_get_capabilities,
 	.start = can_mcan_start,
@@ -546,6 +562,9 @@ static DEVICE_API(can, can_stm32fd_driver_api) = {
 	.timing_data_min = CAN_MCAN_TIMING_DATA_MIN_INITIALIZER,
 	.timing_data_max = CAN_MCAN_TIMING_DATA_MAX_INITIALIZER,
 #endif /* CONFIG_CAN_FD_MODE */
+	.enter_sleep_mode = can_stm32fd_enter_sleep_mode,
+	.exit_sleep_mode = can_stm32fd_exit_sleep_mode,
+	.is_sleep_mode = can_stm32fd_is_sleep_mode
 };
 
 static const struct can_mcan_ops can_stm32fd_ops = {
@@ -555,6 +574,34 @@ static const struct can_mcan_ops can_stm32fd_ops = {
 	.write_mram = can_stm32fd_write_mram,
 	.clear_mram = can_stm32fd_clear_mram,
 };
+
+#ifdef CONFIG_PM_DEVICE
+static int can_stm32fd_pm_action(const struct device *dev, enum pm_device_action action)
+{
+	int ret;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+		ret = can_mcan_enter_sleep_mode(dev);
+		if (ret < 0) {
+			LOG_ERR("Failed to enter sleep mode (err %d)", ret);
+			return ret;
+		}
+		break;
+	case PM_DEVICE_ACTION_RESUME:
+		ret = can_mcan_exit_sleep_mode(dev);
+		if (ret < 0) {
+			LOG_ERR("Failed to exit sleep mode (err %d)", ret);
+			return ret;
+		}
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+#endif /* CONFIG_PM_DEVICE */
 
 #define CAN_STM32FD_BUILD_ASSERT_MRAM_CFG(inst)					\
 	BUILD_ASSERT(CAN_MCAN_DT_INST_MRAM_STD_FILTER_ELEMENTS(inst) == 28,	\
@@ -619,8 +666,19 @@ static void config_can_##inst##_irq(void)                                      \
 	static struct can_mcan_data can_mcan_data_##inst =		\
 		CAN_MCAN_DATA_INITIALIZER(NULL);
 
+#ifdef CONFIG_PM_DEVICE
+#define CAN_STM32FD_PM_DEVICE(inst) \
+	PM_DEVICE_DT_INST_DEFINE(inst, can_stm32fd_pm_action);
+#define CAN_STM32FD_PM_DEVICE_GET(inst) PM_DEVICE_DT_INST_GET(inst)
+#else
+#define CAN_STM32FD_PM_DEVICE(inst)
+#define CAN_STM32FD_PM_DEVICE_GET(inst) NULL
+#endif
+
 #define CAN_STM32FD_DEVICE_INST(inst)						\
-	CAN_DEVICE_DT_INST_DEFINE(inst, can_stm32fd_init, NULL,			\
+	CAN_STM32FD_PM_DEVICE(inst)						\
+	CAN_DEVICE_DT_INST_DEFINE(inst, can_stm32fd_init,			\
+				  CAN_STM32FD_PM_DEVICE_GET(inst),		\
 				  &can_mcan_data_##inst, &can_mcan_cfg_##inst,	\
 				  POST_KERNEL, CONFIG_CAN_INIT_PRIORITY,	\
 				  &can_stm32fd_driver_api);

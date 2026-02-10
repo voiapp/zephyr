@@ -16,6 +16,7 @@
 #include <zephyr/irq.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/pm/device.h>
 #include <zephyr/sys/util.h>
 
 LOG_MODULE_REGISTER(can_stm32, CONFIG_CAN_LOG_LEVEL);
@@ -232,6 +233,28 @@ static inline void can_stm32_bus_state_change_isr(const struct device *dev)
 			cb(dev, state, err_cnt, state_change_cb_data);
 		}
 	}
+
+	/* Sleep/Wake-up interrupt handling */
+	{
+		const struct can_stm32_config *cfg_sleep = dev->config;
+		CAN_TypeDef *can_sleep = cfg_sleep->can;
+
+		/* Sleep mode entered */
+		if (can_sleep->MSR & CAN_MSR_SLAKI) {
+			LOG_DBG("Sleep mode entered");
+			can_sleep->MSR |= CAN_MSR_SLAKI;
+		}
+
+		/* Sleep mode left (wake-up) */
+		if (can_sleep->MSR & CAN_MSR_WKUI) {
+			LOG_DBG("Sleep mode is left");
+			can_sleep->MSR |= CAN_MSR_WKUI;
+			/* If automatic wake-up is not enabled, clear sleep bit */
+			if ((can_sleep->MCR & CAN_MCR_AWUM) == 0) {
+				can_sleep->MCR &= ~CAN_MCR_SLEEP;
+			}
+		}
+	}
 }
 
 static inline void can_stm32_tx_isr_handler(const struct device *dev)
@@ -369,6 +392,51 @@ static int can_stm32_leave_sleep_mode(CAN_TypeDef *can)
 		if (k_cycle_get_32() - start_time > CAN_INIT_TIMEOUT) {
 			return -EAGAIN;
 		}
+	}
+
+	return 0;
+}
+
+static int can_stm32_enter_sleep_mode(const struct device *dev)
+{
+	const struct can_stm32_config *cfg = dev->config;
+	CAN_TypeDef *can = cfg->can;
+	uint32_t start_time;
+
+	/* Clear wake-up interrupt flag if set */
+	if (can->MSR & CAN_MSR_WKUI) {
+		can->MSR |= CAN_MSR_WKUI;
+	}
+
+	/* Set sleep mode with automatic wake-up */
+	can->MCR |= (CAN_MCR_SLEEP | CAN_MCR_AWUM);
+	start_time = k_cycle_get_32();
+
+	/* Wait for sleep acknowledge */
+	while ((can->MSR & CAN_MSR_SLAK) != CAN_MSR_SLAK) {
+		if (k_cycle_get_32() - start_time > CAN_INIT_TIMEOUT) {
+			return -EAGAIN;
+		}
+	}
+
+	return 0;
+}
+
+static int can_stm32_exit_sleep_mode(const struct device *dev)
+{
+	const struct can_stm32_config *cfg = dev->config;
+	CAN_TypeDef *can = cfg->can;
+
+	return can_stm32_leave_sleep_mode(can);
+}
+
+static int can_stm32_is_sleep_mode(const struct device *dev)
+{
+	const struct can_stm32_config *cfg = dev->config;
+	CAN_TypeDef *can = cfg->can;
+
+	if (can->MSR & CAN_MSR_SLAK) {
+		return 1;
 	}
 
 	return 0;
@@ -1100,7 +1168,10 @@ static DEVICE_API(can, can_api_funcs) = {
 		.phase_seg1 = 0x10,
 		.phase_seg2 = 0x08,
 		.prescaler = 0x400
-	}
+	},
+	.enter_sleep_mode = can_stm32_enter_sleep_mode,
+	.exit_sleep_mode = can_stm32_exit_sleep_mode,
+	.is_sleep_mode = can_stm32_is_sleep_mode
 };
 
 #ifdef CONFIG_SOC_SERIES_STM32F0X
@@ -1142,6 +1213,36 @@ static void config_can_##inst##_irq(CAN_TypeDef *can)                \
 }
 #endif /* CONFIG_SOC_SERIES_STM32F0X */
 
+#ifdef CONFIG_PM_DEVICE
+static int can_stm32_pm_action(const struct device *dev, enum pm_device_action action)
+{
+	const struct can_stm32_config *cfg = dev->config;
+	CAN_TypeDef *can = cfg->can;
+	int ret;
+
+	switch (action) {
+	case PM_DEVICE_ACTION_SUSPEND:
+		ret = can_stm32_enter_sleep_mode(dev);
+		if (ret < 0) {
+			LOG_ERR("Failed to enter sleep mode (err %d)", ret);
+			return ret;
+		}
+		break;
+	case PM_DEVICE_ACTION_RESUME:
+		ret = can_stm32_leave_sleep_mode(can);
+		if (ret < 0) {
+			LOG_ERR("Failed to exit sleep mode (err %d)", ret);
+			return ret;
+		}
+		break;
+	default:
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+#endif /* CONFIG_PM_DEVICE */
+
 #define CAN_STM32_CONFIG_INST(inst)                                      \
 PINCTRL_DT_INST_DEFINE(inst);                                            \
 static const struct can_stm32_config can_stm32_cfg_##inst = {            \
@@ -1160,8 +1261,19 @@ static const struct can_stm32_config can_stm32_cfg_##inst = {            \
 #define CAN_STM32_DATA_INST(inst) \
 static struct can_stm32_data can_stm32_dev_data_##inst;
 
+#ifdef CONFIG_PM_DEVICE
+#define CAN_STM32_PM_DEVICE(inst) \
+	PM_DEVICE_DT_INST_DEFINE(inst, can_stm32_pm_action);
+#define CAN_STM32_PM_DEVICE_GET(inst) PM_DEVICE_DT_INST_GET(inst)
+#else
+#define CAN_STM32_PM_DEVICE(inst)
+#define CAN_STM32_PM_DEVICE_GET(inst) NULL
+#endif
+
 #define CAN_STM32_DEFINE_INST(inst)                                      \
-CAN_DEVICE_DT_INST_DEFINE(inst, can_stm32_init, NULL,                    \
+CAN_STM32_PM_DEVICE(inst)                                                \
+CAN_DEVICE_DT_INST_DEFINE(inst, can_stm32_init,                          \
+			  CAN_STM32_PM_DEVICE_GET(inst),                 \
 			  &can_stm32_dev_data_##inst, &can_stm32_cfg_##inst, \
 			  POST_KERNEL, CONFIG_CAN_INIT_PRIORITY,         \
 			  &can_api_funcs);

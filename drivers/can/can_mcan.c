@@ -97,6 +97,81 @@ unlock:
 	return err;
 }
 
+static int can_mcan_enter_sleep_mode(const struct device *dev)
+{
+	struct can_mcan_data *data = dev->data;
+	uint32_t start_time;
+	uint32_t cccr;
+	int err;
+
+	k_mutex_lock(&data->lock, K_FOREVER);
+
+	err = can_mcan_read_reg(dev, CAN_MCAN_CCCR, &cccr);
+	if (err != 0) {
+		goto unlock;
+	}
+
+	cccr |= CAN_MCAN_CCCR_CSR;
+
+	err = can_mcan_write_reg(dev, CAN_MCAN_CCCR, cccr);
+	if (err != 0) {
+		goto unlock;
+	}
+
+	start_time = k_cycle_get_32();
+
+	err = can_mcan_read_reg(dev, CAN_MCAN_CCCR, &cccr);
+	if (err != 0) {
+		goto unlock;
+	}
+
+	while ((cccr & CAN_MCAN_CCCR_CSA) == 0U) {
+		if (k_cycle_get_32() - start_time > k_ms_to_cyc_ceil32(CAN_INIT_TIMEOUT_MS)) {
+			cccr &= ~CAN_MCAN_CCCR_CSR;
+			err = can_mcan_write_reg(dev, CAN_MCAN_CCCR, cccr);
+			if (err != 0) {
+				goto unlock;
+			}
+
+			err = -EAGAIN;
+			goto unlock;
+		}
+
+		err = can_mcan_read_reg(dev, CAN_MCAN_CCCR, &cccr);
+		if (err != 0) {
+			goto unlock;
+		}
+	}
+
+unlock:
+	k_mutex_unlock(&data->lock);
+
+	return err;
+}
+
+static int can_mcan_is_sleep_mode(const struct device *dev)
+{
+	struct can_mcan_data *data = dev->data;
+	uint32_t cccr;
+	int err;
+
+	k_mutex_lock(&data->lock, K_FOREVER);
+
+	err = can_mcan_read_reg(dev, CAN_MCAN_CCCR, &cccr);
+
+	k_mutex_unlock(&data->lock);
+
+	if (err != 0) {
+		return err;
+	}
+
+	if (cccr & CAN_MCAN_CCCR_CSA) {
+		return 1;
+	}
+
+	return 0;
+}
+
 static int can_mcan_enter_init_mode(const struct device *dev, k_timeout_t timeout)
 {
 	struct can_mcan_data *data = dev->data;
