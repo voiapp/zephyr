@@ -524,6 +524,28 @@ void __weak z_early_rand_get(uint8_t *buf, size_t length)
 }
 
 /**
+ * @brief Platform-specific early initialization hook
+ *
+ * This weak function is called at the very beginning of z_cstart(), before
+ * any other initialization (including BSS clearing assumptions). Boards or
+ * SoCs can override this to perform critical hardware setup that must occur
+ * before normal C runtime initialization.
+ *
+ * Example use cases:
+ * - Configuring memory controller option bytes (e.g., SRAM size)
+ * - Setting up external memory that the linker script assumes is available
+ * - Any hardware configuration that must complete before accessing certain
+ *   memory regions
+ *
+ * @note This runs extremely early. Logging, dynamic memory allocation, and
+ *       most kernel services are not available.
+ */
+__weak void z_platform_early_init(void)
+{
+	/* Default implementation does nothing */
+}
+
+/**
  *
  * @brief Initialize kernel
  *
@@ -537,6 +559,9 @@ __boot_func
 FUNC_NO_STACK_PROTECTOR
 FUNC_NORETURN void z_cstart(void)
 {
+	/* Platform-specific early initialization hook */
+	z_platform_early_init();
+
 	/* gcov hook needed to get the coverage report.*/
 	gcov_static_init();
 
