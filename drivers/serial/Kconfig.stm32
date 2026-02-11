@@ -68,4 +68,21 @@ endchoice # UART_STM32U5_ERRATA_DMAT
 
 endif # UART_STM32U5_ERRATA_DMAT_AFFECTED
 
+config UART_STM32_AT32F435_RX_PRELOAD
+	bool "AT32F435 RX preload workaround"
+	depends on UART_INTERRUPT_DRIVEN
+	default n
+	help
+	  Enable workaround for Artery AT32F435/437 UART RX timing requirements.
+	  The AT32F435 reference manual requires that the RDBF (RX data buffer full)
+	  flag be cleared by reading USART_DT before the next frame completes, or
+	  an overrun error (ROERR) occurs and data is lost.
+	  
+	  This option causes the driver to read received bytes immediately in the
+	  ISR and cache them in a software buffer, ensuring RDBF is cleared promptly.
+	  The application's fifo_read then drains from this cache.
+	  
+	  This workaround should only be enabled for AT32F435/437 builds; it is not
+	  needed for standard STM32 parts and has no effect when disabled.
+
 endif # UART_STM32

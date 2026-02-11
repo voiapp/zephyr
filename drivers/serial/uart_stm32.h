@@ -88,6 +88,11 @@ struct uart_stm32_data {
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
 	uart_irq_callback_user_data_t user_cb;
 	void *user_data;
+#if defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
+	/* AT32F435 RX preload workaround: cache one received byte */
+	uint8_t rx_buf;
+	bool rx_buf_valid;
+#endif
 #endif
 
 #ifdef CONFIG_UART_ASYNC_API
