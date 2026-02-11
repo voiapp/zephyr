@@ -166,6 +166,13 @@ static int wwdg_stm32_setup(const struct device *dev, uint8_t options)
 
 	/* Deactivate running when debugger is attached. */
 	if (options & WDT_OPT_PAUSE_HALTED_BY_DBG) {
+#if defined(CONFIG_SOC_SERIES_STM32H5X)
+		/*
+		 * STM32H5 DBGMCU access can be restricted and may fault from
+		 * non-secure context. Ignore this option to allow the watchdog
+		 * to be started normally.
+		 */
+#else
 #if defined(CONFIG_SOC_SERIES_STM32F0X)
 		LL_APB1_GRP2_EnableClock(LL_APB1_GRP2_PERIPH_DBGMCU);
 #elif defined(CONFIG_SOC_SERIES_STM32L0X)
@@ -181,6 +188,7 @@ static int wwdg_stm32_setup(const struct device *dev, uint8_t options)
 #else
 		LL_DBGMCU_APB1_GRP1_FreezePeriph(LL_DBGMCU_APB1_GRP1_WWDG_STOP);
 #endif /* CONFIG_SOC_SERIES_STM32H7X */
+#endif /* CONFIG_SOC_SERIES_STM32H5X */
 	}
 
 	if (options & WDT_OPT_PAUSE_IN_SLEEP) {
