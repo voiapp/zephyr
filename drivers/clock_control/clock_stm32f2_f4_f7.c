@@ -126,7 +126,20 @@ void config_pll_sysclock(void)
 	LL_RCC_PLL_ConfigDomain_SYS(get_pll_source(),
 				    pllm(STM32_PLL_M_DIVISOR),
 				    STM32_PLL_N_MULTIPLIER,
+#if IS_ENABLED(CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING)
+				    /* AT32F435: Pass placeholder - will be overridden below */
+				    0);
+
+	/* Override PLLP with AT32F435 3-bit PLL_FR encoding (bits 18:16).
+	 * The STM32 LL function above uses a 2-bit mask (bits 17:16) which would
+	 * truncate our 3-bit value, so we must write it separately.
+	 */
+	stm32_reg_modify_bits(&RCC->PLLCFGR, AT32F435_CRM_PLLCFG_PLL_FR_MASK,
+			      at32f435_pll_fr(STM32_PLL_P_DIVISOR));
+#else
+				    /* STM32: Use standard 2-bit PLLP encoding */
 				    pllp(STM32_PLL_P_DIVISOR));
+#endif /* CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING */
 #endif /* STM32_PLL_P_ENABLED */
 
 #if STM32_PLL_Q_ENABLED

@@ -854,7 +854,14 @@ static void set_up_plls(void)
 #if defined(STM32_PLL_ENABLED)
 
 #if defined(STM32_SRC_PLL_P) && STM32_PLL_P_ENABLED
+#if IS_ENABLED(CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING)
+	/* AT32F435: Use 3-bit PLL_FR encoding (bits 18:16) for post-divider */
+	stm32_reg_modify_bits(&RCC->PLLCFGR, AT32F435_CRM_PLLCFG_PLL_FR_MASK,
+			      at32f435_pll_fr(STM32_PLL_P_DIVISOR));
+#else
+	/* STM32: Use standard 2-bit PLLP encoding */
 	stm32_reg_modify_bits(&RCC->PLLCFGR, RCC_PLLCFGR_PLLP, pllp(STM32_PLL_P_DIVISOR));
+#endif
 	RCC_PLLP_ENABLE();
 #endif
 #if defined(STM32_SRC_PLL_Q) && STM32_PLL_Q_ENABLED
@@ -863,6 +870,27 @@ static void set_up_plls(void)
 #endif
 
 	config_pll_sysclock();
+
+#if IS_ENABLED(CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING)
+	/* AT32F435 quirk: Set SYSCLK source *before* enabling PLL.
+	 * This undocumented behavior is required for AT32F435 to boot correctly.
+	 */
+#if STM32_SYSCLK_SRC_PLL
+	LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_PLL);
+	while (LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_PLL) {
+	}
+#elif STM32_SYSCLK_SRC_HSE
+	LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_HSE);
+	while (LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_HSE) {
+	}
+#elif STM32_SYSCLK_SRC_MSI
+	LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_MSI);
+	while (LL_RCC_GetSysClkSource() != LL_RCC_SYS_CLKSOURCE_STATUS_MSI) {
+	}
+#elif STM32_SYSCLK_SRC_HSI
+	stm32_clock_switch_to_hsi();
+#endif /* STM32_SYSCLK_SRC_... */
+#endif /* CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING */
 
 	/* Enable PLL */
 	LL_RCC_PLL_Enable();
@@ -1141,6 +1169,10 @@ int stm32_clock_control_init(const struct device *dev)
 		LL_RCC_SetAHBPrescaler(ahb_prescaler(STM32_CORE_PRESCALER));
 	}
 
+#if !IS_ENABLED(CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING)
+	/* For standard STM32: Switch SYSCLK source after PLLs are enabled.
+	 * AT32F435 does this earlier (before PLL enable) due to hardware quirk.
+	 */
 #if STM32_SYSCLK_SRC_PLL
 	/* Set PLL as System Clock Source */
 	LL_RCC_SetSysClkSource(LL_RCC_SYS_CLKSOURCE_PLL);
@@ -1159,6 +1191,7 @@ int stm32_clock_control_init(const struct device *dev)
 #elif STM32_SYSCLK_SRC_HSI
 	stm32_clock_switch_to_hsi();
 #endif /* STM32_SYSCLK_SRC_... */
+#endif /* !CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING */
 
 	if (DT_PROP(DT_NODELABEL(rcc), undershoot_prevention) &&
 		(ahb_prescaler(STM32_CORE_PRESCALER) == ahb_prescaler(1)) &&

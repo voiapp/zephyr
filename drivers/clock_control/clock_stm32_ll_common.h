@@ -12,6 +12,7 @@
 
 #include <zephyr/device.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/sys/__assert.h>
 
 #include <stm32_ll_utils.h>
 
@@ -55,6 +56,51 @@
 #define pllsai2q(v) CONCAT(LL_RCC_PLLSAI2Q_DIV_, v)
 #define pllsai2r(v) CONCAT(LL_RCC_PLLSAI2R_DIV_, v)
 #define pllsai2divr(v) CONCAT(LL_RCC_PLLSAI2DIVR_DIV_, v)
+
+#if IS_ENABLED(CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING)
+/* AT32F435 PLL_FR (post-divider) field: bits 18:16 */
+#define AT32F435_CRM_PLLCFG_PLL_FR_MASK		GENMASK(18, 16)
+#define AT32F435_CRM_PLLCFG_PLL_FR_POS		16
+
+/**
+ * @brief Convert PLL post-divider value to AT32F435 PLL_FR encoding
+ * 
+ * AT32F435 uses 3-bit PLL_FR field (bits 18:16) with direct divisor encoding:
+ * - 010 (0b010) = divide by 4
+ * - 011 (0b011) = divide by 8
+ * - 100 (0b100) = divide by 16
+ * - 101 (0b101) = divide by 32
+ * 
+ * @param divisor PLL post-divider value (4, 8, 16, or 32)
+ * @return Encoded value for PLL_FR field (bits 18:16)
+ */
+static inline uint32_t at32f435_pll_fr(uint32_t divisor)
+{
+	uint32_t encoding;
+
+	switch (divisor) {
+	case 4:
+		encoding = 0b010;
+		break;
+	case 8:
+		encoding = 0b011;
+		break;
+	case 16:
+		encoding = 0b100;
+		break;
+	case 32:
+		encoding = 0b101;
+		break;
+	default:
+		__ASSERT(0, "Invalid AT32F435 PLL post-divider: %u (must be 4, 8, 16, or 32)",
+			 divisor);
+		encoding = 0b010; /* Default to /4 */
+		break;
+	}
+
+	return encoding << AT32F435_CRM_PLLCFG_PLL_FR_POS;
+}
+#endif /* CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING */
 
 #ifdef __cplusplus
 extern "C" {
