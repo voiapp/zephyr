@@ -925,15 +925,41 @@ static int uart_stm32_fifo_fill(const struct device *dev, const uint8_t *tx_data
 					    fifo_fill_with_u8);
 }
 
+#if defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
+typedef void (*fifo_read_fn)(USART_TypeDef *usart, void *rx_data, const int offset,
+			     struct uart_stm32_data *data);
+#else
 typedef void (*fifo_read_fn)(USART_TypeDef *usart, void *rx_data, const int offset);
+#endif
 
 static int uart_stm32_fifo_read_visitor(const struct device *dev, void *rx_data, const int size,
 					fifo_read_fn read_fn)
 {
 	const struct uart_stm32_config *config = dev->config;
 	USART_TypeDef *usart = config->usart;
+#if defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
+	struct uart_stm32_data *data = dev->data;
+#endif
 	int num_rx = 0U;
 
+#if defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
+	while ((size - num_rx > 0) &&
+	       (LL_USART_IsActiveFlag_RXNE(usart) || data->rx_buf_valid)) {
+		/* RXNE flag will be cleared upon read from DR|RDR register */
+
+		read_fn(usart, rx_data, num_rx, data);
+		num_rx++;
+
+		/* Clear overrun error flag */
+		if (LL_USART_IsActiveFlag_ORE(usart)) {
+			LL_USART_ClearFlag_ORE(usart);
+			/*
+			 * On stm32 F4X, F1X, and F2X, the RXNE flag is affected (cleared) by
+			 * the uart_err_check function call (on errors flags clearing)
+			 */
+		}
+	}
+#else
 	while ((size - num_rx > 0) && LL_USART_IsActiveFlag_RXNE(usart)) {
 		/* RXNE flag will be cleared upon read from DR|RDR register */
 
@@ -949,16 +975,33 @@ static int uart_stm32_fifo_read_visitor(const struct device *dev, void *rx_data,
 			 */
 		}
 	}
+#endif
 
 	return num_rx;
 }
 
+#if defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
+static void fifo_read_with_u8(USART_TypeDef *usart, void *rx_data, const int offset,
+			      struct uart_stm32_data *drv_data)
+{
+	uint8_t *data = (uint8_t *)rx_data;
+
+	/* AT32F435: drain cached byte first if valid */
+	if (drv_data->rx_buf_valid) {
+		data[offset] = drv_data->rx_buf;
+		drv_data->rx_buf_valid = false;
+	} else {
+		data[offset] = LL_USART_ReceiveData8(usart);
+	}
+}
+#else
 static void fifo_read_with_u8(USART_TypeDef *usart, void *rx_data, const int offset)
 {
 	uint8_t *data = (uint8_t *)rx_data;
 
 	data[offset] = LL_USART_ReceiveData8(usart);
 }
+#endif
 
 static int uart_stm32_fifo_read(const struct device *dev, uint8_t *rx_data, const int size)
 {
@@ -990,12 +1033,24 @@ static int uart_stm32_fifo_fill_u16(const struct device *dev, const uint16_t *tx
 					    fifo_fill_with_u16);
 }
 
+#if defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
+static void fifo_read_with_u16(USART_TypeDef *usart, void *rx_data, const int offset,
+			       struct uart_stm32_data *drv_data)
+{
+	uint16_t *data = (uint16_t *)rx_data;
+
+	/* Note: AT32F435 RX cache only supports 8-bit data */
+	ARG_UNUSED(drv_data);
+	data[offset] = LL_USART_ReceiveData9(usart);
+}
+#else
 static void fifo_read_with_u16(USART_TypeDef *usart, void *rx_data, const int offset)
 {
 	uint16_t *data = (uint16_t *)rx_data;
 
 	data[offset] = LL_USART_ReceiveData9(usart);
 }
+#endif
 
 static int uart_stm32_fifo_read_u16(const struct device *dev, uint16_t *rx_data, const int size)
 {
@@ -1079,6 +1134,12 @@ static void uart_stm32_irq_rx_disable(const struct device *dev)
 	const struct uart_stm32_config *config = dev->config;
 
 	LL_USART_DisableIT_RXNE(config->usart);
+
+#if defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
+	/* Clear any cached RX data to avoid stale rx_ready state */
+	struct uart_stm32_data *data = dev->data;
+	data->rx_buf_valid = false;
+#endif
 }
 
 static int uart_stm32_irq_rx_ready(const struct device *dev)
@@ -1088,7 +1149,12 @@ static int uart_stm32_irq_rx_ready(const struct device *dev)
 	 * On stm32 F4X, F1X, and F2X, the RXNE flag is affected (cleared) by
 	 * the uart_err_check function call (on errors flags clearing)
 	 */
+#if defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
+	struct uart_stm32_data *data = dev->data;
+	return LL_USART_IsActiveFlag_RXNE(config->usart) || data->rx_buf_valid;
+#else
 	return LL_USART_IsActiveFlag_RXNE(config->usart);
+#endif
 }
 
 static void uart_stm32_irq_err_enable(const struct device *dev)
@@ -1357,7 +1423,8 @@ static void uart_stm32_dma_rx_flush(const struct device *dev, int status)
 static void uart_stm32_isr(const struct device *dev)
 {
 	struct uart_stm32_data *data = dev->data;
-#if defined(CONFIG_PM) || defined(CONFIG_UART_ASYNC_API)
+#if defined(CONFIG_PM) || defined(CONFIG_UART_ASYNC_API) || \
+	defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
 	const struct uart_stm32_config *config = dev->config;
 	USART_TypeDef *usart = config->usart;
 #endif
@@ -1383,6 +1450,20 @@ static void uart_stm32_isr(const struct device *dev)
 
 #ifdef CONFIG_UART_INTERRUPT_DRIVEN
 	if (data->user_cb) {
+#if defined(CONFIG_UART_STM32_AT32F435_RX_PRELOAD)
+		/*
+		 * AT32F435 workaround: pre-read RX byte if available to clear RDBF immediately.
+		 * Per AT32F435/437 RM, RDBF must be cleared (by reading USART_DT) before the
+		 * next frame completes, or an overrun (ROERR) occurs. Pre-reading here ensures
+		 * RDBF is cleared before the user callback runs and before the next byte arrives.
+		 */
+		if (LL_USART_IsActiveFlag_RXNE(usart) &&
+		    LL_USART_IsEnabledIT_RXNE(usart) &&
+		    !data->rx_buf_valid) {
+			data->rx_buf = LL_USART_ReceiveData8(usart);
+			data->rx_buf_valid = true;
+		}
+#endif
 		data->user_cb(dev, data->user_data);
 	}
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
