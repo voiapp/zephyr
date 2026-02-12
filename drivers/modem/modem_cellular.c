@@ -600,8 +600,9 @@ static void modem_cellular_build_apn_script(struct modem_cellular_data *data)
 	append_apn_cmd(data, &steps, "AT+KCNXCFG=1,\"GPRS\",\"%s\",,,\"IPV4\"", apn_value);
 #endif
 
-#if DT_HAS_COMPAT_STATUS_OKAY(quectel_eg800q)
-	/* Second PDP context for CV connection over USB (ECM mode) */
+#if DT_HAS_COMPAT_STATUS_OKAY(quectel_eg800q) && \
+	defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+	/* Second PDP context for CV connection over USB (ECM mode) - Goldeneye only */
 	append_apn_cmd(data, &steps, "AT+CGDCONT=2,\"IP\",\"%s\"", "voi.stage.tele2.com");
 #endif
 
@@ -2485,6 +2486,9 @@ MODEM_CHAT_SCRIPT_DEFINE(quectel_eg25_g_periodic_chat_script,
 #endif
 
 #if DT_HAS_COMPAT_STATUS_OKAY(quectel_eg800q)
+
+#ifdef CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT
+/* Goldeneye-specific scripts with dual PDP context, USB ECM, and NAT support */
 MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_init_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT", ok_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("ATE0", ok_match),
@@ -2509,7 +2513,7 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_init_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
 			      /* Query current USB net mode */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QCFG=\"usbnet\"", allow_match),
-				  /* Set USB net mode to ECM=1 */
+			      /* Set USB net mode to ECM=1 */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QCFG=\"usbnet\",1", allow_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QCFG=\"nat\",1", allow_match),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CMUX=0,0,5,127", ok_match));
@@ -2559,7 +2563,53 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_periodic_chat_script_cmds,
 MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_periodic_chat_script,
 			 quectel_eg800q_periodic_chat_script_cmds, abort_matches,
 			 modem_cellular_chat_callback_handler, 4);
-#endif
+
+#else /* !CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT */
+
+/* Base EG800Q scripts without Goldeneye-specific features */
+MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_init_chat_script_cmds,
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("ATE0", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CFUN?", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CFUN=4", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CMEE=1", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CEREG=1", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CEREG?", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CGSN", imei_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CGMM", cgmm_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CGMI", cgmi_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CGMR", cgmr_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CIMI", cimi_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CMUX=0,0,5,127", ok_match));
+
+MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_init_chat_script, quectel_eg800q_init_chat_script_cmds,
+			 abort_matches, modem_cellular_chat_callback_handler, 30);
+
+MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_dial_chat_script_cmds,
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=0,1", allow_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CFUN=1", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP_NONE("AT", 500),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("ATD*99***1#", connect_match),);
+
+MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_dial_chat_script, quectel_eg800q_dial_chat_script_cmds,
+			 dial_abort_matches, modem_cellular_chat_callback_handler, 10);
+
+MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_periodic_chat_script_cmds,
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CEREG?", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CSQ", csq_match));
+
+MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_periodic_chat_script,
+			 quectel_eg800q_periodic_chat_script_cmds, abort_matches,
+			 modem_cellular_chat_callback_handler, 4);
+
+#endif /* CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT */
+
+#endif /* DT_HAS_COMPAT_STATUS_OKAY(quectel_eg800q) */
 
 #if DT_HAS_COMPAT_STATUS_OKAY(simcom_sim7080)
 MODEM_CHAT_SCRIPT_CMDS_DEFINE(simcom_sim7080_init_chat_script_cmds,
