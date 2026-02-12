@@ -103,4 +103,17 @@ config MODEM_CELLULAR_CLEAR_FORBIDDEN
 
 endif #DT_HAS_U_BLOX_LARA_R6_ENABLED
 
+if DT_HAS_QUECTEL_EG800Q_ENABLED
+
+config MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT
+	bool "Use Goldeneye-specific modem chat script for Quectel EG800Q"
+	help
+	  Enable the Goldeneye-specific modem initialization and dial scripts
+	  for Quectel EG800Q. This includes dual PDP context support (IoT platform
+	  over PPP and CV connection over USB ECM), USB net mode configuration,
+	  NAT setup, and enhanced registration checks. Leave disabled for basic
+	  EG800Q operation without these features.
+
+endif #DT_HAS_QUECTEL_EG800Q_ENABLED
+
 endif #MODEM_CELLULAR
