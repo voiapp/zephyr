@@ -3,7 +3,7 @@
 
 description: Common properties for Zephyr cellular modems
 
-include: uart-device.yaml
+include: [uart-device.yaml, power.yaml]
 
 properties:
   mdm-power-gpios:

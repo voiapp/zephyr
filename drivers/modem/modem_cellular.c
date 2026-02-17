@@ -8,6 +8,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/cellular.h>
+#include <zephyr/drivers/regulator.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/modem/chat.h>
 #include <zephyr/modem/cmux.h>
@@ -189,6 +190,7 @@ struct modem_cellular_user_pipe {
 
 struct modem_cellular_config {
 	const struct device *uart;
+	const struct device *vin_supply;
 	struct gpio_dt_spec power_gpio;
 	struct gpio_dt_spec reset_gpio;
 	struct gpio_dt_spec wake_gpio;
@@ -813,6 +815,12 @@ static int modem_cellular_on_idle_state_enter(struct modem_cellular_data *data)
 	modem_ppp_release(data->ppp);
 	modem_cmux_release(&data->cmux);
 	modem_pipe_close_async(data->uart_pipe);
+
+	/* Disable the modem power supply regulator after shutdown */
+	if (IS_ENABLED(CONFIG_REGULATOR) && config->vin_supply) {
+		regulator_disable(config->vin_supply);
+	}
+
 	k_sem_give(&data->suspended_sem);
 	return 0;
 }
@@ -860,8 +868,20 @@ static int modem_cellular_on_idle_state_leave(struct modem_cellular_data *data)
 {
 	const struct modem_cellular_config *config =
 		(const struct modem_cellular_config *)data->dev->config;
+	int ret;
 
 	k_sem_take(&data->suspended_sem, K_NO_WAIT);
+
+	/* Enable the modem power supply regulator before power-up sequence */
+	if (IS_ENABLED(CONFIG_REGULATOR) && config->vin_supply) {
+		ret = regulator_enable(config->vin_supply);
+		if (ret < 0) {
+			LOG_ERR("Failed to enable modem power supply: %d", ret);
+			return ret;
+		}
+		/* Allow time for regulator to stabilize before modem power operations */
+		k_sleep(K_MSEC(10));
+	}
 
 	if (modem_cellular_gpio_is_enabled(&config->reset_gpio)) {
 		gpio_pin_set_dt(&config->reset_gpio, 0);
@@ -3104,6 +3124,7 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       shutdown_script)                                            \
 	static const struct modem_cellular_config MODEM_CELLULAR_INST_NAME(config, inst) = {       \
 		.uart = DEVICE_DT_GET(DT_INST_BUS(inst)),                                          \
+		.vin_supply = DEVICE_DT_GET_OR_NULL(DT_INST_PHANDLE(inst, vin_supply)),            \
 		.power_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, mdm_power_gpios, {}),                 \
 		.reset_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, mdm_reset_gpios, {}),                 \
 		.wake_gpio = GPIO_DT_SPEC_INST_GET_OR(inst, mdm_wake_gpios, {}),                   \
@@ -3165,7 +3186,8 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       NULL,                                                       \
 				       &quectel_eg25_g_init_chat_script,                           \
 				       &quectel_eg25_g_dial_chat_script,                           \
-				       &quectel_eg25_g_periodic_chat_script, NULL)
+				       &quectel_eg25_g_periodic_chat_script,                       \
+				       NULL)
 
 #define MODEM_CELLULAR_DEVICE_QUECTEL_EG800Q(inst)                                                 \
 	MODEM_DT_INST_PPP_DEFINE(inst, MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);   \
@@ -3184,7 +3206,8 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       NULL,                                                       \
 				       &quectel_eg800q_init_chat_script,                           \
 				       &quectel_eg800q_dial_chat_script,                           \
-				       &quectel_eg800q_periodic_chat_script, NULL)
+				       &quectel_eg800q_periodic_chat_script,                       \
+				       NULL)
 
 #define MODEM_CELLULAR_DEVICE_SIMCOM_SIM7080(inst)                                                 \
 	MODEM_DT_INST_PPP_DEFINE(inst, MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);   \
@@ -3203,7 +3226,8 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       NULL,                                                       \
 				       &simcom_sim7080_init_chat_script,                           \
 				       &simcom_sim7080_dial_chat_script,                           \
-				       &simcom_sim7080_periodic_chat_script, NULL)
+				       &simcom_sim7080_periodic_chat_script,                       \
+				       NULL)
 
 #define MODEM_CELLULAR_DEVICE_SIMCOM_A76XX(inst)                                                   \
 	MODEM_DT_INST_PPP_DEFINE(inst, MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);   \
@@ -3242,7 +3266,8 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       NULL,                                                       \
 				       &u_blox_sara_r4_init_chat_script,                           \
 				       &u_blox_sara_r4_dial_chat_script,                           \
-				       &u_blox_sara_r4_periodic_chat_script, NULL)
+				       &u_blox_sara_r4_periodic_chat_script,                       \
+				       NULL)
 
 #define MODEM_CELLULAR_DEVICE_U_BLOX_SARA_R5(inst)                                                 \
 	MODEM_DT_INST_PPP_DEFINE(inst, MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);   \
@@ -3261,7 +3286,8 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       NULL,                                                       \
 				       &u_blox_sara_r5_init_chat_script,                           \
 				       &u_blox_sara_r5_dial_chat_script,                           \
-				       &u_blox_sara_r5_periodic_chat_script, NULL)
+				       &u_blox_sara_r5_periodic_chat_script,                       \
+				       NULL)
 
 #define MODEM_CELLULAR_DEVICE_U_BLOX_LARA_R6(inst)                                                 \
 	MODEM_DT_INST_PPP_DEFINE(inst, MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);   \
@@ -3300,7 +3326,8 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       NULL,                                                       \
 				       &swir_hl7800_init_chat_script,                              \
 				       &swir_hl7800_dial_chat_script,                              \
-				       &swir_hl7800_periodic_chat_script, NULL)
+				       &swir_hl7800_periodic_chat_script,                          \
+				       NULL)
 
 #define MODEM_CELLULAR_DEVICE_TELIT_ME910G1(inst)                                                  \
 	MODEM_DT_INST_PPP_DEFINE(inst, MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);   \
@@ -3375,7 +3402,8 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       NULL,                                                       \
 				       &sqn_gm02s_init_chat_script,                                \
 				       &sqn_gm02s_dial_chat_script,                                \
-				       &sqn_gm02s_periodic_chat_script, NULL)
+				       &sqn_gm02s_periodic_chat_script,                            \
+				       NULL)
 
 #define DT_DRV_COMPAT quectel_bg95
 DT_INST_FOREACH_STATUS_OKAY(MODEM_CELLULAR_DEVICE_QUECTEL_BG9X)
