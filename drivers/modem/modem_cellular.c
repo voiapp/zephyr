@@ -46,6 +46,10 @@ BUILD_ASSERT(sizeof(CONFIG_MODEM_CELLULAR_APN) - 1 < MODEM_CELLULAR_DATA_APN_LEN
 			"CONFIG_MODEM_CELLULAR_APN too long for data->apn");
 #endif
 
+#ifdef CONFIG_MODEM_CELLULAR_BG9X_DYNAMIC_APN
+BUILD_ASSERT(sizeof(CONFIG_MODEM_CELLULAR_BG9X_APN_TELE2) - 1 < MODEM_CELLULAR_DATA_APN_LEN,
+			"CONFIG_MODEM_CELLULAR_BG9X_APN_TELE2 too long for data->apn");
+#endif
 
 static const char *modem_cellular_state_str(enum modem_cellular_state state)
 {
@@ -589,6 +593,30 @@ static void modem_cellular_build_apn_script(struct modem_cellular_data *data)
 		(const struct modem_cellular_config *)data->dev->config;
 	uint8_t steps = 0;
 	const char *apn_value = data->apn;
+
+#if (DT_HAS_COMPAT_STATUS_OKAY(quectel_bg95) || DT_HAS_COMPAT_STATUS_OKAY(quectel_bg96)) && \
+	defined(CONFIG_MODEM_CELLULAR_BG9X_DYNAMIC_APN)
+	/*
+	 * Dynamic APN selection for legacy Wolfenstein/Doom boards that may carry
+	 * either Tele2 or Arkessa/Wireless Logic SIM cards. The ICCID is already
+	 * populated by the init chat script (AT+QCCID). Compare its prefix against
+	 * the configured Tele2 mask and switch the APN accordingly so that the
+	 * correct PDP context is established regardless of which SIM is installed.
+	 */
+	if ((data->iccid[0] != '\0') &&
+	    (strncmp((const char *)data->iccid,
+		     CONFIG_MODEM_CELLULAR_BG9X_TELE2_ICCID_MASK,
+		     strlen(CONFIG_MODEM_CELLULAR_BG9X_TELE2_ICCID_MASK)) == 0)) {
+		strncpy((char *)data->apn, CONFIG_MODEM_CELLULAR_BG9X_APN_TELE2,
+			sizeof(data->apn) - 1);
+		data->apn[sizeof(data->apn) - 1] = '\0';
+		LOG_INF("BG9x: Tele2 SIM detected (ICCID prefix %s), APN overridden to %s",
+			CONFIG_MODEM_CELLULAR_BG9X_TELE2_ICCID_MASK,
+			CONFIG_MODEM_CELLULAR_BG9X_APN_TELE2);
+	} else if (data->iccid[0] != '\0') {
+		LOG_INF("BG9x: Non-Tele2 SIM detected, using APN: %s", data->apn);
+	}
+#endif /* BG9x dynamic APN */
 
 	if (config->use_default_apn) {
 		/* Omit the APN name AT+CGDCONT=1,"IP","" */
