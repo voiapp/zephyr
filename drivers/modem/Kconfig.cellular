@@ -110,6 +110,39 @@ config MODEM_CELLULAR_CLEAR_FORBIDDEN
 
 endif #DT_HAS_U_BLOX_LARA_R6_ENABLED
 
+if DT_HAS_QUECTEL_BG95_ENABLED || DT_HAS_QUECTEL_BG96_ENABLED
+
+config MODEM_CELLULAR_BG9X_DYNAMIC_APN
+	bool "Dynamic APN selection based on SIM ICCID for BG9x modems"
+	default n
+	help
+	  Enable runtime APN selection for the Quectel BG95/BG96 based on the SIM
+	  card ICCID prefix. This is required on boards that may be equipped with
+	  SIM cards from different providers (e.g. Tele2 and Arkessa/Wireless Logic).
+	  The ICCID is read from the modem during initialization and compared against
+	  a configurable prefix. When the prefix matches, a provider-specific APN is
+	  used instead of the value from CONFIG_MODEM_CELLULAR_APN.
+
+if MODEM_CELLULAR_BG9X_DYNAMIC_APN
+
+config MODEM_CELLULAR_BG9X_TELE2_ICCID_MASK
+	string "ICCID prefix identifying Tele2 SIM cards"
+	default "894620"
+	help
+	  SIM cards whose ICCID starts with this prefix are treated as Tele2 SIMs.
+	  When a match is found the driver switches to CONFIG_MODEM_CELLULAR_BG9X_APN_TELE2
+	  for the PDP context instead of the default CONFIG_MODEM_CELLULAR_APN.
+
+config MODEM_CELLULAR_BG9X_APN_TELE2
+	string "APN to use for Tele2 SIM cards"
+	default "m2m.tele2.com"
+	help
+	  APN string used when the SIM ICCID matches CONFIG_MODEM_CELLULAR_BG9X_TELE2_ICCID_MASK.
+
+endif # MODEM_CELLULAR_BG9X_DYNAMIC_APN
+
+endif # DT_HAS_QUECTEL_BG95_ENABLED || DT_HAS_QUECTEL_BG96_ENABLED
+
 if DT_HAS_QUECTEL_EG800Q_ENABLED
 
 config MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT
