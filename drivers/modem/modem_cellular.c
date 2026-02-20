@@ -632,7 +632,7 @@ static void modem_cellular_build_apn_script(struct modem_cellular_data *data)
 #if DT_HAS_COMPAT_STATUS_OKAY(quectel_eg800q) && \
 	defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
 	/* Second PDP context for CV connection over USB (ECM mode) - Goldeneye only */
-	append_apn_cmd(data, &steps, "AT+CGDCONT=2,\"IP\",\"%s\"", "voi.stage.tele2.com");
+	append_apn_cmd(data, &steps, "AT+CGDCONT=2,\"IP\",\"%s\"", "voi.cv.stage.tele2.com");
 #endif
 
 	/* Glue the array into the script object */
@@ -2549,9 +2549,9 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_dial_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CFUN=1", ok_match),
 			      /* Small delay after CFUN */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_NONE("AT", 500),
-			      /* Activate PDP context 1 for IoT platform PPP (m2m.tele2.com) */
+			      /* Activate PDP context 1 for IoT platform PPP (voi.{env}.tele2.com) where env is either stage or prod */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=1,1", allow_match),
-			      /* Activate PDP context 2 for CV USB ECM (voi.stage.tele2.com) */
+			      /* Activate PDP context 2 for CV USB ECM (voi.cv.{env}.tele2.com) where env is either stage or prod */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=1,2", allow_match),
 			      /* AT Commands Manual: Verify PDP context activation status */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT?", allow_match),
