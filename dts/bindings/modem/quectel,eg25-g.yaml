@@ -17,3 +17,12 @@ properties:
 
   zephyr,mdm-reset-behavior:
     default: ["toggle_on_recovery"]
+
+  autostarts:
+    type: boolean
+    description: |
+      Set when the module starts automatically when supply voltage is applied,
+      or when the host application manages the power-on sequence externally
+      (e.g. via a board-level PWRKEY pulse before modem_cellular_init runs).
+      Causes modem_cellular to skip its own power-on/reset pulse and go
+      directly to AWAIT_POWER_ON.
