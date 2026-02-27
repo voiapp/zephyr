@@ -11,3 +11,11 @@ properties:
   mdm-power-gpios:
     type: phandle-array
     required: true
+
+  autostarts:
+    type: boolean
+    description: |
+      Set when the host application manages the power-on sequence externally
+      (e.g. via a board-level PWRKEY pulse before modem_cellular_init runs).
+      Causes modem_cellular to skip its own power-on pulse and go directly
+      to AWAIT_POWER_ON.
