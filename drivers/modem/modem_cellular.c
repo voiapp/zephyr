@@ -2268,9 +2268,23 @@ int modem_cellular_init(const struct device *dev)
 	}
 
 	if (modem_cellular_gpio_is_enabled(&config->reset_gpio)) {
-		gpio_flags_t flags =
-			(config->hold_reset_on_suspend) ? GPIO_OUTPUT_ACTIVE : GPIO_OUTPUT_INACTIVE;
-		gpio_pin_configure_dt(&config->reset_gpio, flags);
+		/*
+		 * When autostarts is set, board_init already performed the
+		 * power-on sequence (PWRKEY pulse) before modem_cellular_init
+		 * runs.  Configure the pin as INACTIVE (logical 0 = deasserted)
+		 * so we do not interrupt the ongoing boot with a spurious reset
+		 * assertion.  For the normal path, honour hold_reset_on_suspend
+		 * to decide whether to assert reset here or release it; the
+		 * RESET_PULSE state provides the controlled release otherwise.
+		 */
+		if (config->autostarts) {
+			gpio_pin_configure_dt(&config->reset_gpio, GPIO_OUTPUT_INACTIVE);
+		} else {
+			gpio_flags_t flags = (config->hold_reset_on_suspend)
+						     ? GPIO_OUTPUT_ACTIVE
+						     : GPIO_OUTPUT_INACTIVE;
+			gpio_pin_configure_dt(&config->reset_gpio, flags);
+		}
 	}
 
 	if (modem_cellular_gpio_is_enabled(&config->ring_gpio)) {
