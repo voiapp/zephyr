@@ -835,7 +835,16 @@ static void modem_cellular_reset_pulse_event_handler(struct modem_cellular_data 
 
 	switch (evt) {
 	case MODEM_CELLULAR_EVENT_TIMEOUT:
-		if (modem_cellular_gpio_is_enabled(&config->power_gpio)) {
+		/*
+		 * On autostarts boards (e.g. Quectel EG91-EX on doom/wolfenstein)
+		 * the modem self-starts after RESET_N is de-asserted; skip
+		 * POWER_ON_PULSE entirely.  The power_pulse_duration_ms for the
+		 * EG25-G is 1500 ms which exceeds the EG91-EX power-off threshold
+		 * of 650 ms, so sending that pulse shuts the modem back down and
+		 * creates an infinite boot → power-off → reset loop.
+		 */
+		if (!config->autostarts &&
+		    modem_cellular_gpio_is_enabled(&config->power_gpio)) {
 			modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_AWAIT_RESET);
 		} else {
 			modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_AWAIT_POWER_ON);
@@ -3153,11 +3162,14 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 						  (user_pipe_0, 3),                                \
 						  (user_pipe_1, 4))                                \
                                                                                                    \
-	MODEM_CELLULAR_DEFINE_INSTANCE(inst, 1500, 500, 15000, 5000, false,                        \
-				       NULL,                                                       \
-				       &quectel_eg25_g_init_chat_script,                           \
-				       &quectel_eg25_g_dial_chat_script,                           \
-				       &quectel_eg25_g_periodic_chat_script, NULL)
+	/* startup_time_ms raised to 25000: the EG91-EX can take up to 25 s to
+	 * assert CTS after a PWRKEY pulse.  15000 ms caused the init script to
+	 * fire while CTS was still de-asserted, blocking every ATE0 attempt. */
+	MODEM_CELLULAR_DEFINE_INSTANCE(inst, 1500, 500, 25000, 5000, false,                        \
+			       NULL,                                                       \
+			       &quectel_eg25_g_init_chat_script,                           \
+			       &quectel_eg25_g_dial_chat_script,                           \
+			       &quectel_eg25_g_periodic_chat_script, NULL)
 
 #define MODEM_CELLULAR_DEVICE_QUECTEL_EG800Q(inst)                                                 \
 	MODEM_DT_INST_PPP_DEFINE(inst, MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);   \
