@@ -3173,8 +3173,10 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 				       &quectel_bg9x_periodic_chat_script,                         \
 				       &quectel_bg9x_shutdown_chat_script)
 
-/* startup_time_ms raised to 25000: the EG91-EX can take up to 25 s to assert CTS after a PWRKEY
- * pulse; 15000 ms caused the init script to fire while CTS was still de-asserted, blocking ATE0.
+/* startup_time_ms raised to 35000: the EG91-EX (used on doom/wolfenstein) can take up to 35 s
+ * after a PWRKEY pulse or hardware reset before CTS is asserted and AT commands are accepted.
+ * 15000 ms and 25000 ms were both insufficient for doom's unit, causing every ATE0 attempt to
+ * time out because the nRF UART's hw-flow-control blocked TX while CTS was still de-asserted.
  */
 #define MODEM_CELLULAR_DEVICE_QUECTEL_EG25_G(inst)                                                 \
 	MODEM_DT_INST_PPP_DEFINE(inst, MODEM_CELLULAR_INST_NAME(ppp, inst), NULL, 98, 1500, 64);   \
@@ -3189,7 +3191,7 @@ MODEM_CHAT_SCRIPT_DEFINE(sqn_gm02s_periodic_chat_script,
 						  (user_pipe_0, 3),                                \
 						  (user_pipe_1, 4))                                \
                                                                                                    \
-	MODEM_CELLULAR_DEFINE_INSTANCE(inst, 1500, 500, 25000, 5000, false,                        \
+	MODEM_CELLULAR_DEFINE_INSTANCE(inst, 1500, 500, 35000, 5000, false,                        \
 				       NULL,                                                       \
 				       &quectel_eg25_g_init_chat_script,                           \
 				       &quectel_eg25_g_dial_chat_script,                           \
