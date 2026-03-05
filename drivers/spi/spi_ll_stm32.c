@@ -1338,6 +1338,17 @@ static int transceive_dma(const struct device *dev,
 		spi_context_buffers_setup(&data->ctx, tx_bufs, rx_bufs, 2);
 	}
 
+	/*
+	 * DMA data-size setup moved here (before SPE) so the pre-load below
+	 * can use word_size_bytes and spi_context_update_tx correctly.
+	 */
+	uint8_t word_size_bytes = SPI_WORD_SIZE_GET(config->operation) / BITS_PER_BYTE;
+
+	data->dma_rx.dma_cfg.source_data_size = word_size_bytes;
+	data->dma_rx.dma_cfg.dest_data_size = word_size_bytes;
+	data->dma_tx.dma_cfg.source_data_size = word_size_bytes;
+	data->dma_tx.dma_cfg.dest_data_size = word_size_bytes;
+
 #if DT_HAS_COMPAT_STATUS_OKAY(st_stm32h7_spi)
 	/* set request before enabling (else SPI CFG1 reg is write protected) */
 	if (transfer_dir == LL_SPI_FULL_DUPLEX) {
@@ -1347,6 +1358,37 @@ static int transceive_dma(const struct device *dev,
 		LL_SPI_EnableDMAReq_TX(spi);
 	} else {
 		LL_SPI_EnableDMAReq_RX(spi);
+	}
+
+	/*
+	 * Pre-load the first TX frame directly into TxFIFO while SPE=0.
+	 *
+	 * Root cause: when SPE=1 is set (below), the SPI peripheral
+	 * immediately drives MOSI to the MSB of its shift register - which
+	 * still holds the last byte of the previous transfer.  The DMA only
+	 * starts filling TxFIFO several microseconds later (after dma_config +
+	 * dma_start in the loop below), so MOSI floats at that stale value
+	 * for the entire DMA-setup window, corrupting the first transmitted
+	 * bit.
+	 *
+	 * Fix: write the first frame to SPI_TXDR directly from CPU while
+	 * SPE=0.  Per RM0481 §52.4.14, TxFIFO accepts writes when SPE=0.
+	 * When SPE=1 is set, the TxFIFO is already non-empty so MOSI is
+	 * pre-driven from the correct first byte, not from stale state.
+	 * The DMA then continues from the second frame onwards.
+	 */
+	if ((transfer_dir == LL_SPI_HALF_DUPLEX_TX ||
+	     transfer_dir == LL_SPI_FULL_DUPLEX) &&
+	    LL_SPI_GetMode(spi) == LL_SPI_MODE_MASTER &&
+	    data->ctx.tx_buf != NULL && data->ctx.tx_len > 0) {
+		if (word_size_bytes == 1) {
+			LL_SPI_TransmitData8(spi,
+				*(const uint8_t *)data->ctx.tx_buf);
+		} else {
+			LL_SPI_TransmitData16(spi,
+				*(const uint16_t *)data->ctx.tx_buf);
+		}
+		spi_context_update_tx(&data->ctx, word_size_bytes, 1);
 	}
 
 	LL_SPI_Enable(spi);
@@ -1364,13 +1406,6 @@ static int transceive_dma(const struct device *dev,
 
 	/* This is turned off in spi_stm32_complete(). */
 	spi_stm32_cs_control(dev, true);
-
-	uint8_t word_size_bytes = SPI_WORD_SIZE_GET(config->operation) / BITS_PER_BYTE;
-
-	data->dma_rx.dma_cfg.source_data_size = word_size_bytes;
-	data->dma_rx.dma_cfg.dest_data_size = word_size_bytes;
-	data->dma_tx.dma_cfg.source_data_size = word_size_bytes;
-	data->dma_tx.dma_cfg.dest_data_size = word_size_bytes;
 
 	while (data->ctx.rx_len > 0 || data->ctx.tx_len > 0) {
 		size_t dma_len;
