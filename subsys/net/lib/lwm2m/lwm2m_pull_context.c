@@ -513,9 +513,29 @@ int lwm2m_pull_context_start_transfer(char *uri, struct requesting_object req, k
 	 * engine can send the CoAP 2.04 Changed ACK to the server.
 	 */
 	ret = k_sem_take(&lwm2m_pull_sem, K_NO_WAIT);
+	if (ret && pull_service_state == STOPPING) {
+		/*
+		 * The previous download finished and scheduled lwm2m_engine_stop()
+		 * via a 1 ms service-poll deferral (cleanup_context).  However,
+		 * the engine thread can dispatch an incoming CoAP write in the same
+		 * processing loop iteration, before that 1 ms tick fires, causing a
+		 * spurious -EALREADY.
+		 *
+		 * start_transfer() is always called from the engine thread — the
+		 * same context that pull_service runs in.  It is therefore safe to
+		 * run the deferred cleanup inline right now.
+		 */
+		lwm2m_engine_stop(&context.firmware_ctx);
+		pull_service_state = IDLE;
+		/* The STOPPING handler would have released lwm2m_pull_sem.  Since
+		 * we bypassed that path, give and immediately re-take the semaphore
+		 * to maintain proper ownership for this new transfer. */
+		k_sem_give(&lwm2m_pull_sem);
+		ret = k_sem_take(&lwm2m_pull_sem, K_NO_WAIT);
+	}
 	if (ret) {
 		/*
-		 * A download is already running.  Return an error so the
+		 * A download is genuinely running.  Return an error so the
 		 * caller can propagate a CoAP error response.  Do NOT touch
 		 * context.result_cb here — calling the in-flight download's
 		 * result callback would incorrectly trigger its state machine
