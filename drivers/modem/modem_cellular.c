@@ -35,6 +35,7 @@ LOG_MODULE_REGISTER(modem_cellular, CONFIG_MODEM_LOG_LEVEL);
 #define MODEM_CELLULAR_DATA_MANUFACTURER_LEN (65)
 #define MODEM_CELLULAR_DATA_FW_VERSION_LEN   (65)
 #define MODEM_CELLULAR_DATA_APN_LEN          (32)
+#define MODEM_CELLULAR_DATA_PDP_ADDR_LEN     (16) /* dotted-decimal IPv4, e.g. "255.255.255.255" */
 
 #define MODEM_CELLULAR_RESERVED_DLCIS        (2)
 #define MODEM_CELLULAR_MAX_APN_CMDS          (2)
@@ -152,6 +153,8 @@ struct modem_cellular_data {
 	uint8_t manufacturer[MODEM_CELLULAR_DATA_MANUFACTURER_LEN];
 	uint8_t fw_version[MODEM_CELLULAR_DATA_FW_VERSION_LEN];
 	uint8_t apn[MODEM_CELLULAR_DATA_APN_LEN];
+	uint8_t pdp_addr_1[MODEM_CELLULAR_DATA_PDP_ADDR_LEN];
+	uint8_t pdp_addr_2[MODEM_CELLULAR_DATA_PDP_ADDR_LEN];
 
 	struct modem_chat_script_chat apn_chats[MODEM_CELLULAR_MAX_APN_CMDS];
 	struct modem_chat_script apn_script;
@@ -2066,6 +2069,12 @@ static int modem_cellular_get_modem_info(const struct device *dev,
 	case CELLULAR_MODEM_INFO_SIM_ICCID:
 		strncpy(info, &data->iccid[0], MIN(size, sizeof(data->iccid)));
 		break;
+	case CELLULAR_MODEM_INFO_PDP_ADDR_1:
+		strncpy(info, &data->pdp_addr_1[0], MIN(size, sizeof(data->pdp_addr_1)));
+		break;
+	case CELLULAR_MODEM_INFO_PDP_ADDR_2:
+		strncpy(info, &data->pdp_addr_2[0], MIN(size, sizeof(data->pdp_addr_2)));
+		break;
 	default:
 		ret = -ENODATA;
 		break;
@@ -2489,6 +2498,45 @@ MODEM_CHAT_SCRIPT_DEFINE(quectel_eg25_g_periodic_chat_script,
 #if DT_HAS_COMPAT_STATUS_OKAY(quectel_eg800q)
 
 #ifdef CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT
+
+/*
+ * Parser for AT+CGPADDR responses, used only by the Goldeneye dial script.
+ * +CGPADDR: <cid>,"<addr>" — split on '"' gives argv[1]="<cid>," argv[2]="<ip>"
+ */
+static void modem_cellular_chat_on_cgpaddr(struct modem_chat *chat, char **argv, uint16_t argc,
+					   void *user_data)
+{
+	struct modem_cellular_data *data = (struct modem_cellular_data *)user_data;
+
+	if (argc != 3) {
+		return;
+	}
+
+	switch (atoi(argv[1])) {
+	case 1:
+		strncpy(data->pdp_addr_1, argv[2], sizeof(data->pdp_addr_1) - 1);
+		data->pdp_addr_1[sizeof(data->pdp_addr_1) - 1] = '\0';
+		break;
+	case 2:
+		strncpy(data->pdp_addr_2, argv[2], sizeof(data->pdp_addr_2) - 1);
+		data->pdp_addr_2[sizeof(data->pdp_addr_2) - 1] = '\0';
+		break;
+	default:
+		break;
+	}
+}
+
+/*
+ * Match set for AT+CGPADDR responses.  Each +CGPADDR line is marked partial so
+ * it fires the callback but does not advance the script; only OK/ERROR do that.
+ */
+MODEM_CHAT_MATCHES_DEFINE(cgpaddr_matches,
+			  MODEM_CHAT_MATCH_INITIALIZER("+CGPADDR: ", "\"",
+						       modem_cellular_chat_on_cgpaddr, false,
+						       true),
+			  MODEM_CHAT_MATCH("OK", "", NULL),
+			  MODEM_CHAT_MATCH("ERROR", "", NULL));
+
 /* Goldeneye-specific scripts with dual PDP context, USB ECM, and NAT support */
 MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_init_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT", ok_match),
@@ -2547,8 +2595,8 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_dial_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QNETDEVCTL=1,2,1", allow_match),
 			      /* AT Commands Manual: Verify USB netcard connection state (expect state=1) */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+QNETDEVCTL?", allow_match),
-			      /* AT Commands Manual: Query IP addresses for all contexts */
-			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGPADDR", allow_match),
+		      /* AT Commands Manual: Query IP addresses for all contexts */
+		      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGPADDR", cgpaddr_matches),
 			      /* Small delay before dialing PPP */
 			      MODEM_CHAT_SCRIPT_CMD_RESP_NONE("AT", 500),
 			      /* PPP Application Note: Dial PPP with ATD*99# (uses context 1) */

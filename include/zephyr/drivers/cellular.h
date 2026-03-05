@@ -103,6 +103,10 @@ enum cellular_modem_info_type {
 	CELLULAR_MODEM_INFO_SIM_IMSI,
 	/** Integrated Circuit Card Identification Number (SIM) */
 	CELLULAR_MODEM_INFO_SIM_ICCID,
+	/** IPv4 address of PDP context 1 (main data, dotted-decimal string) */
+	CELLULAR_MODEM_INFO_PDP_ADDR_1,
+	/** IPv4 address of PDP context 2 (secondary data, dotted-decimal string) */
+	CELLULAR_MODEM_INFO_PDP_ADDR_2,
 };
 
 /** Cellular registration status (3GPP TS 27.007) */
