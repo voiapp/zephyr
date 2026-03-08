@@ -64,6 +64,16 @@ int i2c_nrfx_twi_recover_bus(const struct device *dev)
 	sda_pin = nrf_twi_sda_pin_get(config->twi.p_twi);
 
 	err = nrfx_twi_bus_recover(scl_pin, sda_pin);
+	if (err == NRFX_SUCCESS) {
+		/* nrfx_twi_bus_recover() temporarily reconfigures SCL/SDA as
+		 * GPIO open-drain for the 9-clock-pulse recovery sequence.
+		 * The TWI peripheral is initialized with skip_gpio_cfg=true and
+		 * skip_psel_cfg=true, so nrfx_twi_enable() will NOT restore the
+		 * pin configuration.  Explicitly re-apply the pinctrl default
+		 * state so the TWI peripheral regains control of the pins.
+		 */
+		(void)pinctrl_apply_state(config->pcfg, PINCTRL_STATE_DEFAULT);
+	}
 	return (err == NRFX_SUCCESS ? 0 : -EBUSY);
 }
 
