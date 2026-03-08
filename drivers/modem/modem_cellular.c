@@ -2784,8 +2784,14 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(simcom_a76xx_init_chat_script_cmds,
 		      MODEM_CHAT_SCRIPT_CMD_RESP("", ok_match),
 		      MODEM_CHAT_SCRIPT_CMD_RESP_NONE("AT+CMUX=0,0,5,127", 300));
 
+/* SIM7600E can take >30 s to respond after a reboot (observed 31+ s in CI).
+ * The original 10 s timeout causes timed-out init, then the modem_cellular
+ * driver retries but observe_scooter_control fixture already expired with
+ * DEADLINE_EXCEEDED, cascading to ~79 test errors per run.  Use 60 s to
+ * give the module sufficient time to wake up on the slowest cold boot.
+ */
 MODEM_CHAT_SCRIPT_DEFINE(simcom_a76xx_init_chat_script, simcom_a76xx_init_chat_script_cmds,
-			 abort_matches, modem_cellular_chat_callback_handler, 10);
+			 abort_matches, modem_cellular_chat_callback_handler, 60);
 
 MODEM_CHAT_SCRIPT_CMDS_DEFINE(simcom_a76xx_dial_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT=0,1", allow_match),
