@@ -718,7 +718,8 @@ static void modem_cellular_build_apn_script(struct modem_cellular_data *data)
 #if DT_HAS_COMPAT_STATUS_OKAY(quectel_eg800q) && \
 	defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
 	/* Second PDP context for CV connection over USB (ECM mode) - Goldeneye only */
-	append_apn_cmd(data, &steps, "AT+CGDCONT=2,\"IP\",\"%s\"", "voi.cv.stage.tele2.com");
+	append_apn_cmd(data, &steps, "AT+CGDCONT=2,\"IP\",\"%s\"",
+		       CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_CV_APN);
 #endif
 
 	/* Glue the array into the script object */

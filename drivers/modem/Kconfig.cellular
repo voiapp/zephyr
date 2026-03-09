@@ -154,6 +154,18 @@ config MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT
 	  NAT setup, and enhanced registration checks. Leave disabled for basic
 	  EG800Q operation without these features.
 
+if MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT
+
+config MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_CV_APN
+	string "APN for the second PDP context (CV over USB ECM) on Goldeneye"
+	default "voi.cv.stage.tele2.com"
+	help
+	  APN string used for the second PDP context (bearer 2) which carries
+	  the CV connection over USB ECM mode on Goldeneye hardware. This is
+	  distinct from the primary IoT-platform APN set by CONFIG_MODEM_CELLULAR_APN.
+
+endif # MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT
+
 endif #DT_HAS_QUECTEL_EG800Q_ENABLED
 
 endif #MODEM_CELLULAR
