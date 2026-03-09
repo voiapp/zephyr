@@ -585,7 +585,7 @@ static int do_update_reply_cb(const struct coap_packet *response,
 	uint8_t code;
 
 	code = coap_header_get_code(response);
-	LOG_INF("Update callback (code:%u.%u)",
+	LOG_DBG("Update callback (code:%u.%u)",
 		COAP_RESPONSE_CODE_CLASS(code),
 		COAP_RESPONSE_CODE_DETAIL(code));
 
@@ -597,7 +597,7 @@ static int do_update_reply_cb(const struct coap_packet *response,
 		client.server_disabled = false;
 		client.retries = 0;
 		set_sm_state(ENGINE_REGISTRATION_DONE);
-		LOG_INF("Update Done");
+		LOG_DBG("Update Done");
 		return 0;
 	}
 
