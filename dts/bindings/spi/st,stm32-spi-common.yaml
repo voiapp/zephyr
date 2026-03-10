@@ -21,3 +21,21 @@ properties:
   ioswp:
     type: boolean
     description: Swap SPI MOSI and MISO pins
+
+  st,spi-data-width:
+    type: string
+    enum:
+      - "full-4-to-32-bit"
+      - "full-4-to-16-bit"
+      - "limited-8-16-bit"
+    description: |
+      Data width capability of the SPI peripheral.
+        full-4-to-32-bit: Supports 4 to 32-bit data sizes (e.g. STM32H7/H5/U5 style).
+        full-4-to-16-bit: Supports 4 to 16-bit data sizes (e.g. STM32F4 FIFO style).
+        limited-8-16-bit: Only 8-bit or 16-bit data sizes (e.g. classic STM32F1 style).
+
+  st,soft-nss:
+    type: boolean
+    description: |
+      Enable software NSS management. When set, the NSS pin is driven by
+      software rather than the SPI hardware NSS signal.

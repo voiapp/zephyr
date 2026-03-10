@@ -32,3 +32,21 @@ properties:
   fifo-enable:
     type: boolean
     description: Enable the SPI FIFO usage for performance improvement.
+
+  st,spi-data-width:
+    default: "full-4-to-32-bit"
+
+  fifo-size:
+    type: int
+    default: 16
+    description: |
+      SPI FIFO depth in bytes. Used to compute the FIFO threshold watermark
+      for interrupt-driven transfers. Default is 16 bytes (STM32H7/H5/U5).
+
+  fifo-max-transfer-size:
+    type: int
+    default: 65535
+    description: |
+      Maximum number of SPI frames per transfer (TSIZE register limit).
+      Transfers exceeding this value will return an error. The 16-bit TSIZE
+      register in STM32H7/H5-style SPI limits this to 65535.

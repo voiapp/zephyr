@@ -6,3 +6,7 @@ description: STM32 SPI controller with embedded Rx and Tx FIFOs
 compatible: "st,stm32-spi-fifo"
 
 include: st,stm32-spi-common.yaml
+
+properties:
+  st,spi-data-width:
+    default: "full-4-to-16-bit"
