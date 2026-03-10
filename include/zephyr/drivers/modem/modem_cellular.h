@@ -50,6 +50,7 @@ extern "C" {
 #define MODEM_CELLULAR_DATA_MANUFACTURER_LEN (65)
 #define MODEM_CELLULAR_DATA_FW_VERSION_LEN   (65)
 #define MODEM_CELLULAR_DATA_APN_LEN          (32)
+#define MODEM_CELLULAR_DATA_PDP_ADDR_LEN     (16) /* dotted-decimal IPv4, e.g. "255.255.255.255" */
 #define MODEM_CELLULAR_MAX_APN_CMDS          (2)
 #define MODEM_CELLULAR_APN_BUF_SIZE          (64)
 
@@ -147,6 +148,8 @@ struct modem_cellular_data {
 	uint8_t manufacturer[MODEM_CELLULAR_DATA_MANUFACTURER_LEN];
 	uint8_t fw_version[MODEM_CELLULAR_DATA_FW_VERSION_LEN];
 	uint8_t apn[MODEM_CELLULAR_DATA_APN_LEN];
+	uint8_t pdp_addr_1[MODEM_CELLULAR_DATA_PDP_ADDR_LEN];
+	uint8_t pdp_addr_2[MODEM_CELLULAR_DATA_PDP_ADDR_LEN];
 
 	struct modem_chat_script_chat apn_chats[MODEM_CELLULAR_MAX_APN_CMDS];
 	struct modem_chat_script apn_script;

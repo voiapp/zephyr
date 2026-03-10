@@ -1742,6 +1742,7 @@ static int transceive_dma(const struct device *dev,
 	 * can use word_size_bytes and spi_context_update_tx correctly.
 	 */
 	uint8_t word_size_bytes = SPI_WORD_SIZE_GET(config->operation) / BITS_PER_BYTE;
+	const uint8_t dfs = word_size_bytes;
 
 	data->dma_rx.dma_cfg.source_data_size = word_size_bytes;
 	data->dma_rx.dma_cfg.source_burst_length = word_size_bytes;
