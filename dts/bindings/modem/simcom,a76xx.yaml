@@ -8,6 +8,14 @@ compatible: "simcom,a76xx"
 include: zephyr,cellular-modem-device.yaml
 
 properties:
+  vin-supply:
+    type: phandle
+    description: |
+      Regulator supplying the modem VIN/VBAT power rail.
+      When present, the modem power management can use regulator_enable/
+      regulator_disable for power sequencing instead of or in addition to
+      mdm-power-gpios.
+
   mdm-power-gpios:
     type: phandle-array
     required: true
