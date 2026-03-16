@@ -7,4 +7,9 @@ include: zephyr,cellular-modem-device.yaml
 properties:
   mdm-power-gpios:
     type: phandle-array
-    required: true
+    required: false
+
+  vin-supply:
+    type: phandle
+    description: |
+      Regulator supplying the modem VIN/VBAT power rail.
