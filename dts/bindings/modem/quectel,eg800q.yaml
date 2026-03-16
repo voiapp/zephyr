@@ -7,7 +7,12 @@ include: zephyr,cellular-modem-device.yaml
 properties:
   mdm-power-gpios:
     type: phandle-array
-    required: true
+    required: false
 
   zephyr,mdm-reset-behavior:
     default: ["toggle_on_recovery"]
+
+  vin-supply:
+    type: phandle
+    description: |
+      Regulator supplying the modem VIN/VBAT power rail.
