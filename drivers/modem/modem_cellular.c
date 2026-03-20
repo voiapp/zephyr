@@ -16,6 +16,7 @@
 #include <zephyr/modem/pipelink.h>
 #include <zephyr/modem/ppp.h>
 #include <zephyr/modem/backend/uart.h>
+#include <zephyr/modem/workqueue.h>
 #include <zephyr/net/ppp.h>
 #include <zephyr/pm/device.h>
 #include <zephyr/pm/device_runtime.h>
@@ -312,6 +313,7 @@ static void modem_cellular_chat_on_modem_ready(struct modem_chat *chat, char **a
 {
 	struct modem_cellular_data *data = user_data;
 
+	LOG_INF("APP RDY received from modem");
 	modem_cellular_delegate_event(data, MODEM_CELLULAR_EVENT_MODEM_READY);
 }
 
@@ -544,6 +546,12 @@ MODEM_CHAT_MATCHES_DEFINE(__maybe_unused unsol_matches,
 
 MODEM_CHAT_MATCHES_DEFINE(abort_matches, MODEM_CHAT_MATCH("ERROR", "", NULL));
 
+/* Fallback when APP RDY never arrives: send AT, expect OK. 5 s timeout. */
+MODEM_CHAT_SCRIPT_CMDS_DEFINE(await_power_on_probe_cmds,
+			      MODEM_CHAT_SCRIPT_CMD_RESP("AT", ok_match));
+MODEM_CHAT_SCRIPT_DEFINE(await_power_on_probe_script, await_power_on_probe_cmds,
+			 abort_matches, modem_cellular_chat_callback_handler, 5);
+
 MODEM_CHAT_MATCHES_DEFINE(__maybe_unused dial_abort_matches,
 			  MODEM_CHAT_MATCH("ERROR", "", NULL),
 			  MODEM_CHAT_MATCH("BUSY", "", NULL),
@@ -652,23 +660,32 @@ static void modem_cellular_log_event(enum modem_cellular_event evt)
 	LOG_DBG("event %s", modem_cellular_event_str(evt));
 }
 
+static void modem_cellular_timeout_handler(struct k_timer *timer)
+{
+	struct modem_cellular_data *data =
+		CONTAINER_OF(timer, struct modem_cellular_data, timeout_timer);
+
+	/* Timer runs in ISR context; must not block. Submit work to run delegate. */
+	modem_work_submit(&data->timeout_dispatch_work);
+}
+
+static void modem_cellular_timeout_dispatch_handler(struct k_work *item)
+{
+	struct modem_cellular_data *data =
+		CONTAINER_OF(item, struct modem_cellular_data, timeout_dispatch_work);
+
+	LOG_DBG("timeout fired, delegating TIMEOUT event");
+	modem_cellular_delegate_event(data, MODEM_CELLULAR_EVENT_TIMEOUT);
+}
+
 static void modem_cellular_start_timer(struct modem_cellular_data *data, k_timeout_t timeout)
 {
-	k_work_schedule(&data->timeout_work, timeout);
+	k_timer_start(&data->timeout_timer, timeout, K_FOREVER);
 }
 
 static void modem_cellular_stop_timer(struct modem_cellular_data *data)
 {
-	k_work_cancel_delayable(&data->timeout_work);
-}
-
-static void modem_cellular_timeout_handler(struct k_work *item)
-{
-	struct k_work_delayable *dwork = k_work_delayable_from_work(item);
-	struct modem_cellular_data *data =
-		CONTAINER_OF(dwork, struct modem_cellular_data, timeout_work);
-
-	modem_cellular_delegate_event(data, MODEM_CELLULAR_EVENT_TIMEOUT);
+	k_timer_stop(&data->timeout_timer);
 }
 
 static void modem_cellular_event_dispatch_handler(struct k_work *item)
@@ -688,7 +705,7 @@ static void modem_cellular_delegate_event(struct modem_cellular_data *data,
 					  enum modem_cellular_event evt)
 {
 	k_pipe_write(&data->event_pipe, (const uint8_t *)&evt, sizeof(evt), K_NO_WAIT);
-	k_work_submit(&data->event_dispatch_work);
+	modem_work_submit(&data->event_dispatch_work);
 }
 
 static void modem_cellular_begin_power_off_pulse(struct modem_cellular_data *data)
@@ -948,14 +965,35 @@ static int modem_cellular_on_power_on_pulse_state_leave(struct modem_cellular_da
 	return 0;
 }
 
-static int modem_cellular_on_await_power_on_state_enter(struct modem_cellular_data *data)
+static void modem_cellular_await_power_on_transition(struct modem_cellular_data *data)
 {
 	const struct modem_cellular_config *config =
 		(const struct modem_cellular_config *)data->dev->config;
 
-	modem_cellular_start_timer(data, K_MSEC(config->startup_time_ms));
+	if (config->set_baudrate_chat_script != NULL) {
+		modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_SET_BAUDRATE);
+	} else {
+		modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_RUN_INIT_SCRIPT);
+	}
+}
+
+static int modem_cellular_on_await_power_on_state_enter(struct modem_cellular_data *data)
+{
+	uint32_t timeout_ms = CONFIG_MODEM_CELLULAR_AWAIT_POWER_ON_TIMEOUT_MS;
+
+	LOG_INF("Awaiting APP RDY (timeout %u ms) or AT probe fallback", timeout_ms);
+	data->await_power_on_probe_retries = 0U;
+	modem_cellular_start_timer(data, K_MSEC(timeout_ms));
 	modem_pipe_attach(data->uart_pipe, modem_cellular_bus_pipe_handler, data);
 	return modem_pipe_open_async(data->uart_pipe);
+}
+
+static int modem_cellular_on_await_power_on_state_leave(struct modem_cellular_data *data)
+{
+	modem_cellular_stop_timer(data);
+	/* Cancel any pending timeout work so a stale TIMEOUT is not delivered after modem ready */
+	(void)k_work_cancel(&data->timeout_dispatch_work);
+	return 0;
 }
 
 static void modem_cellular_await_power_on_event_handler(struct modem_cellular_data *data,
@@ -967,19 +1005,45 @@ static void modem_cellular_await_power_on_event_handler(struct modem_cellular_da
 	switch (evt) {
 	case MODEM_CELLULAR_EVENT_BUS_OPENED:
 		modem_chat_attach(&data->chat, data->uart_pipe);
+		LOG_INF("UART pipe opened, listening for APP RDY");
 		break;
+
 	case MODEM_CELLULAR_EVENT_MODEM_READY:
-		/* disable the timer and fall through, as we are ready to proceed */
 		modem_cellular_stop_timer(data);
+		modem_cellular_await_power_on_transition(data);
+		break;
+
 	case MODEM_CELLULAR_EVENT_TIMEOUT:
-		if (config->set_baudrate_chat_script != NULL) {
-			modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_SET_BAUDRATE);
+		/* APP RDY never arrived; probe with AT to verify modem is responsive */
+		LOG_INF("APP RDY timeout, probing modem with AT");
+		modem_cellular_stop_timer(data);
+		modem_chat_run_script_async(&data->chat, &await_power_on_probe_script);
+		break;
+
+	case MODEM_CELLULAR_EVENT_SCRIPT_SUCCESS:
+		/* AT probe succeeded; modem is responsive, proceed */
+		LOG_INF("AT probe succeeded, modem responsive");
+		modem_cellular_await_power_on_transition(data);
+		break;
+
+	case MODEM_CELLULAR_EVENT_SCRIPT_FAILED:
+		/* AT probe failed; retry or proceed anyway to avoid infinite loop */
+		data->await_power_on_probe_retries++;
+		LOG_INF("AT probe failed (retry %u/%d)",
+			data->await_power_on_probe_retries,
+			CONFIG_MODEM_CELLULAR_AWAIT_POWER_ON_PROBE_RETRIES);
+		if (data->await_power_on_probe_retries < CONFIG_MODEM_CELLULAR_AWAIT_POWER_ON_PROBE_RETRIES) {
+			modem_cellular_start_timer(data,
+				K_MSEC(CONFIG_MODEM_CELLULAR_AWAIT_POWER_ON_TIMEOUT_MS));
 		} else {
-			modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_RUN_INIT_SCRIPT);
+			LOG_WRN("APP RDY and AT probe failed %d times, proceeding anyway",
+				CONFIG_MODEM_CELLULAR_AWAIT_POWER_ON_PROBE_RETRIES);
+			modem_cellular_await_power_on_transition(data);
 		}
 		break;
 
 	case MODEM_CELLULAR_EVENT_SUSPEND:
+		modem_cellular_stop_timer(data);
 		modem_cellular_enter_state(data, MODEM_CELLULAR_STATE_IDLE);
 		break;
 
@@ -1758,6 +1822,10 @@ static int modem_cellular_on_state_leave(struct modem_cellular_data *data)
 		ret = modem_cellular_on_power_on_pulse_state_leave(data);
 		break;
 
+	case MODEM_CELLULAR_STATE_AWAIT_POWER_ON:
+		ret = modem_cellular_on_await_power_on_state_leave(data);
+		break;
+
 	case MODEM_CELLULAR_STATE_OPEN_DLCI1:
 		ret = modem_cellular_on_open_dlci1_state_leave(data);
 		break;
@@ -2269,7 +2337,9 @@ int modem_cellular_init(const struct device *dev)
 	data->dev = dev;
 
 	k_mutex_init(&data->api_lock);
-	k_work_init_delayable(&data->timeout_work, modem_cellular_timeout_handler);
+	k_timer_init(&data->timeout_timer, modem_cellular_timeout_handler, NULL);
+	k_work_init(&data->timeout_dispatch_work, modem_cellular_timeout_dispatch_handler);
+
 	k_work_init(&data->event_dispatch_work, modem_cellular_event_dispatch_handler);
 	k_pipe_init(&data->event_pipe, data->event_buf, sizeof(data->event_buf));
 

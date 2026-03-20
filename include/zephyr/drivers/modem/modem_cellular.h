@@ -161,7 +161,11 @@ struct modem_cellular_data {
 
 	enum modem_cellular_state state;
 	const struct device *dev;
-	struct k_work_delayable timeout_work;
+	struct k_timer timeout_timer;
+	struct k_work timeout_dispatch_work;
+
+	/* Await power on: retry count when AT probe fails after APP RDY timeout */
+	uint8_t await_power_on_probe_retries;
 
 	/* Power management */
 	struct k_sem suspended_sem;
