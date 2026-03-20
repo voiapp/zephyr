@@ -88,6 +88,21 @@ config MODEM_CELLULAR_RESET_POWER_ON_DELAY_MS
 	int "Delay between de-asserting the reset pin and pulsing the power pin"
 	default 500
 
+config MODEM_CELLULAR_AWAIT_POWER_ON_TIMEOUT_MS
+	int "Timeout in ms for APP RDY before falling back to AT probe"
+	default 30000
+	help
+	  If APP RDY is not received within this time, the driver sends AT and
+	  proceeds if it gets OK. Ensures the modem can recover when APP RDY
+	  was missed (e.g. sent before pipe opened).
+
+config MODEM_CELLULAR_AWAIT_POWER_ON_PROBE_RETRIES
+	int "Max AT probe retries when APP RDY times out"
+	default 3
+	help
+	  When APP RDY times out, the driver probes with AT. If the probe
+	  fails, it retries up to this many times before proceeding anyway.
+
 if DT_HAS_U_BLOX_LARA_R6_ENABLED
 
 choice MODEM_CELLULAR_RAT
