@@ -1702,6 +1702,57 @@ static int do_composite_read_op(struct lwm2m_message *msg, uint16_t content_form
 	}
 }
 
+/* Negative errno from LwM2M handlers (e.g. -ENOENT) — keep logs human-readable. */
+static const char *lwm2m_errno_desc(int err)
+{
+	if (err >= 0) {
+		return "unexpected non-negative";
+	}
+
+	switch (-err) {
+	case ENOENT:
+		return "ENOENT: no such resource or read handler returned no data";
+	case EPERM:
+		return "EPERM: read not permitted on this resource";
+	case ENOMEM:
+		return "ENOMEM: response buffer exhausted";
+	case ENOTCONN:
+		return "ENOTCONN: resource unavailable (e.g. link down)";
+	case EINVAL:
+		return "EINVAL: invalid argument in read handler";
+	case EACCES:
+		return "EACCES: access denied";
+	case EBADF:
+		return "EBADF: bad resource descriptor";
+	case EBUSY:
+		return "EBUSY: resource busy";
+	default:
+		return "see errno.h (value is negative errno code)";
+	}
+}
+
+static void lwm2m_path_to_str(char *buf, size_t len, const struct lwm2m_obj_path *path)
+{
+	if (!path || len == 0U) {
+		if (len > 0U) {
+			buf[0] = '\0';
+		}
+		return;
+	}
+
+	if (path->level > 3) {
+		snprintk(buf, len, "/%u/%u/%u/%u", path->obj_id, path->obj_inst_id,
+			 path->res_id, path->res_inst_id);
+	} else if (path->level > 2) {
+		snprintk(buf, len, "/%u/%u/%u", path->obj_id, path->obj_inst_id,
+			 path->res_id);
+	} else if (path->level > 1) {
+		snprintk(buf, len, "/%u/%u", path->obj_id, path->obj_inst_id);
+	} else {
+		snprintk(buf, len, "/%u", path->obj_id);
+	}
+}
+
 static int lwm2m_perform_read_object_instance(struct lwm2m_message *msg,
 					      struct lwm2m_engine_obj_inst *obj_inst,
 					      uint8_t *num_read)
@@ -1754,7 +1805,12 @@ static int lwm2m_perform_read_object_instance(struct lwm2m_message *msg,
 					/* ignore errors unless single read */
 					if (msg->path.level > LWM2M_PATH_LEVEL_OBJECT_INST &&
 					    !LWM2M_HAS_PERM(obj_field, BIT(LWM2M_FLAG_OPTIONAL))) {
-						LOG_ERR("READ OP: %d", ret);
+						char path_str[LWM2M_MAX_PATH_STR_SIZE];
+
+						lwm2m_path_to_str(path_str, sizeof(path_str),
+								  &msg->path);
+						LOG_ERR("LwM2M read failed: path=%s ret=%d (%s)",
+							path_str, ret, lwm2m_errno_desc(ret));
 					}
 				} else {
 					*num_read += 1U;
