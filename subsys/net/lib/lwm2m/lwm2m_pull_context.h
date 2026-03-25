@@ -26,3 +26,10 @@ struct requesting_object {
  * something else.
  */
 int lwm2m_pull_context_start_transfer(char *uri, struct requesting_object req, k_timeout_t timeout);
+
+/**
+ * @return true if no firmware/package pull is holding the download guard
+ *         (same semantics as a successful k_sem_take(&lwm2m_pull_sem, K_NO_WAIT)
+ *         followed by k_sem_give — peek only).
+ */
+bool lwm2m_pull_context_transfer_is_idle(void);
