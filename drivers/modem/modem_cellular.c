@@ -999,9 +999,6 @@ static int modem_cellular_on_await_power_on_state_leave(struct modem_cellular_da
 static void modem_cellular_await_power_on_event_handler(struct modem_cellular_data *data,
 							enum modem_cellular_event evt)
 {
-	const struct modem_cellular_config *config =
-		(const struct modem_cellular_config *)data->dev->config;
-
 	switch (evt) {
 	case MODEM_CELLULAR_EVENT_BUS_OPENED:
 		modem_chat_attach(&data->chat, data->uart_pipe);
