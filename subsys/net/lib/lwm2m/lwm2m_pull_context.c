@@ -31,6 +31,15 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME);
  */
 static K_SEM_DEFINE(lwm2m_pull_sem, 1, 1);
 
+bool lwm2m_pull_context_transfer_is_idle(void)
+{
+	if (k_sem_take(&lwm2m_pull_sem, K_NO_WAIT) == 0) {
+		k_sem_give(&lwm2m_pull_sem);
+		return true;
+	}
+	return false;
+}
+
 /*
  * pull_start_sem is the trigger from the write callback to the pull thread.
  * start_transfer() signals it (non-blocking give), and the pull thread waits
@@ -120,6 +129,12 @@ static void cleanup_context(void)
 {
 	pull_service_state = STOPPING;
 	lwm2m_engine_update_service_period(pull_service, 1);
+	/*
+	 * Ensure the engine thread runs the STOPPING handler soon; if the
+	 * service poll is delayed, lwm2m_pull_sem can stay taken and the
+	 * device stops accepting new Package URI writes until reboot.
+	 */
+	lwm2m_engine_wake_up();
 }
 
 static void pull_thread_fn(void *p1, void *p2, void *p3)

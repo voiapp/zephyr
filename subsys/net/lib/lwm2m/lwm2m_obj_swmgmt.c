@@ -611,8 +611,13 @@ static void set_update_result(uint16_t obj_inst_id, int error_code)
 {
 	int ret;
 	struct lwm2m_swmgmt_data *instance;
+	uint8_t fail_res = UPD_RES_LOST_CONNECTION_DURING_DOWNLOAD;
 
 	instance = find_index(obj_inst_id);
+	if (!instance) {
+		LOG_ERR("set_update_result: unknown instance %u", obj_inst_id);
+		return;
+	}
 
 	if (error_code == 0) {
 		handle_event(instance, EVENT_PKG_WRITTEN);
@@ -633,18 +638,30 @@ static void set_update_result(uint16_t obj_inst_id, int error_code)
 		return;
 	}
 
-	handle_event(instance, EVENT_DOWNLOAD_FAILED);
-	if (error_code == -ENOMEM) {
-		set_sw_update_result(instance, UPD_RES_OUT_OF_MEMORY_DURING_DOWNLOAD);
-	} else if (error_code == -ENOSPC) {
-		set_sw_update_result(instance, UPD_RES_NOT_ENOUGH_STORAGE);
-	} else if (error_code == -EFAULT) {
-		set_sw_update_result(instance, UPD_RES_PACKAGE_INTEGRITY_CHECK_FAILURE);
-	} else if (error_code == -ENOTSUP) {
-		set_sw_update_result(instance, UPD_RES_INVALID_URI);
-	} else {
-		set_sw_update_result(instance, UPD_RES_LOST_CONNECTION_DURING_DOWNLOAD);
+	ret = handle_event(instance, EVENT_DOWNLOAD_FAILED);
+	if (ret < 0) {
+		/*
+		 * e.g. update_state was not DOWNLOAD_STARTED — leave the engine
+		 * unable to accept a new Package URI until reboot unless we
+		 * reset resources and run the download-failed cleanup sentinel.
+		 */
+		LOG_WRN("EVENT_DOWNLOAD_FAILED failed (ret=%d) inst %u, forcing recovery",
+			ret, obj_inst_id);
+		set_sw_update_state(instance, UPD_STATE_INITIAL);
+		instance->write_package_cb(instance->obj_inst_id, 0, 0, NULL, 0,
+					   false, 0, 0);
 	}
+
+	if (error_code == -ENOMEM) {
+		fail_res = UPD_RES_OUT_OF_MEMORY_DURING_DOWNLOAD;
+	} else if (error_code == -ENOSPC) {
+		fail_res = UPD_RES_NOT_ENOUGH_STORAGE;
+	} else if (error_code == -EFAULT) {
+		fail_res = UPD_RES_PACKAGE_INTEGRITY_CHECK_FAILURE;
+	} else if (error_code == -ENOTSUP) {
+		fail_res = UPD_RES_INVALID_URI;
+	}
+	set_sw_update_result(instance, fail_res);
 }
 
 static int package_uri_write_cb(uint16_t obj_inst_id, uint16_t res_id,
@@ -657,6 +674,23 @@ static int package_uri_write_cb(uint16_t obj_inst_id, uint16_t res_id,
 	struct lwm2m_swmgmt_data *instance = NULL;
 
 	instance = find_index(obj_inst_id);
+	if (!instance) {
+		return -EINVAL;
+	}
+
+	/*
+	 * After a pull timeout or other failure, update_state can remain
+	 * DOWNLOAD_STARTED while lwm2m_pull_sem is already idle — subsequent
+	 * Package URI writes are rejected (wrong state) or starved. Heal
+	 * before starting a new transfer.
+	 */
+	if (instance->update_state == UPD_STATE_DOWNLOAD_STARTED &&
+	    lwm2m_pull_context_transfer_is_idle()) {
+		LOG_WRN("SWMGMT inst %u: stale DOWNLOAD_STARTED without active pull, "
+			"recovering",
+			obj_inst_id);
+		(void)handle_event(instance, EVENT_DOWNLOAD_FAILED);
+	}
 
 	struct requesting_object req = { .obj_inst_id = obj_inst_id,
 					 .is_firmware_uri = false,
