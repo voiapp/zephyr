@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 zephyr_library()
+zephyr_library_property(ALLOW_EMPTY TRUE)
 zephyr_syscall_header(${ZEPHYR_BASE}/include/zephyr/drivers/charger.h)
 
 zephyr_library_sources_ifdef(CONFIG_CHARGER_AXP2101 charger_axp2101.c)
