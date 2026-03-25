@@ -19,6 +19,15 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(fs, CONFIG_FS_LOG_LEVEL);
 
+/* Human-readable errno for negative fs return codes (e.g. -ENOENT). */
+static inline const char *fs_errno_str(int rc)
+{
+	if (rc >= 0) {
+		return "";
+	}
+	return strerror(-rc);
+}
+
 /* list of mounted file systems */
 static sys_dlist_t fs_mnt_list = SYS_DLIST_STATIC_INIT(&fs_mnt_list);
 
@@ -143,7 +152,8 @@ int fs_open(struct fs_file_t *zfp, const char *file_name, fs_mode_t flags)
 	bool truncate_file = false;
 
 	if ((file_name == NULL) || (file_name[0] != '/') || (file_name[1] == '\0')) {
-		LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file name: %s",
+			file_name ? file_name : "(null)");
 		return -EINVAL;
 	}
 
@@ -153,7 +163,7 @@ int fs_open(struct fs_file_t *zfp, const char *file_name, fs_mode_t flags)
 
 	rc = fs_get_mnt_point(&mp, file_name, NULL);
 	if (rc < 0) {
-		LOG_ERR("mount point not found!!");
+		LOG_ERR("mount point not found for path: %s", file_name);
 		return rc;
 	}
 
@@ -182,7 +192,8 @@ int fs_open(struct fs_file_t *zfp, const char *file_name, fs_mode_t flags)
 	zfp->mp = mp;
 	rc = mp->fs->open(zfp, file_name, flags);
 	if (rc < 0) {
-		LOG_ERR("file open error (%d)", rc);
+		LOG_ERR("file open failed path=%s rc=%d (%s)", file_name, rc,
+			fs_errno_str(rc));
 		zfp->mp = NULL;
 		return rc;
 	}
@@ -194,7 +205,8 @@ int fs_open(struct fs_file_t *zfp, const char *file_name, fs_mode_t flags)
 		/* Truncate the opened file to 0 length */
 		rc = mp->fs->truncate(zfp, 0);
 		if (rc < 0) {
-			LOG_ERR("file truncation failed (%d)", rc);
+			LOG_ERR("file truncation failed path=%s rc=%d (%s)",
+				file_name, rc, fs_errno_str(rc));
 			zfp->mp = NULL;
 			return rc;
 		}
@@ -217,7 +229,7 @@ int fs_close(struct fs_file_t *zfp)
 
 	rc = zfp->mp->fs->close(zfp);
 	if (rc < 0) {
-		LOG_ERR("file close error (%d)", rc);
+		LOG_ERR("file close error rc=%d (%s)", rc, fs_errno_str(rc));
 		return rc;
 	}
 
@@ -240,7 +252,7 @@ ssize_t fs_read(struct fs_file_t *zfp, void *ptr, size_t size)
 
 	rc = zfp->mp->fs->read(zfp, ptr, size);
 	if (rc < 0) {
-		LOG_ERR("file read error (%d)", rc);
+		LOG_ERR("file read error rc=%d (%s)", rc, fs_errno_str(rc));
 	}
 
 	return rc;
@@ -260,7 +272,7 @@ ssize_t fs_write(struct fs_file_t *zfp, const void *ptr, size_t size)
 
 	rc = zfp->mp->fs->write(zfp, ptr, size);
 	if (rc < 0) {
-		LOG_ERR("file write error (%d)", rc);
+		LOG_ERR("file write error rc=%d (%s)", rc, fs_errno_str(rc));
 	}
 
 	return rc;
@@ -280,7 +292,7 @@ int fs_seek(struct fs_file_t *zfp, off_t offset, int whence)
 
 	rc = zfp->mp->fs->lseek(zfp, offset, whence);
 	if (rc < 0) {
-		LOG_ERR("file seek error (%d)", rc);
+		LOG_ERR("file seek error rc=%d (%s)", rc, fs_errno_str(rc));
 	}
 
 	return rc;
@@ -300,7 +312,7 @@ off_t fs_tell(struct fs_file_t *zfp)
 
 	rc = zfp->mp->fs->tell(zfp);
 	if (rc < 0) {
-		LOG_ERR("file tell error (%d)", rc);
+		LOG_ERR("file tell error rc=%d (%s)", rc, fs_errno_str(rc));
 	}
 
 	return rc;
@@ -320,7 +332,7 @@ int fs_truncate(struct fs_file_t *zfp, off_t length)
 
 	rc = zfp->mp->fs->truncate(zfp, length);
 	if (rc < 0) {
-		LOG_ERR("file truncate error (%d)", rc);
+		LOG_ERR("file truncate error rc=%d (%s)", rc, fs_errno_str(rc));
 	}
 
 	return rc;
@@ -340,7 +352,7 @@ int fs_sync(struct fs_file_t *zfp)
 
 	rc = zfp->mp->fs->sync(zfp);
 	if (rc < 0) {
-		LOG_ERR("file sync error (%d)", rc);
+		LOG_ERR("file sync error rc=%d (%s)", rc, fs_errno_str(rc));
 	}
 
 	return rc;
@@ -353,7 +365,8 @@ int fs_opendir(struct fs_dir_t *zdp, const char *abs_path)
 	int rc = -EINVAL;
 
 	if ((abs_path == NULL) || (abs_path[0] != '/')) {
-		LOG_ERR("invalid directory name!!");
+		LOG_ERR("invalid directory name: %s",
+			abs_path ? abs_path : "(null)");
 		return -EINVAL;
 	}
 
@@ -376,7 +389,7 @@ int fs_opendir(struct fs_dir_t *zdp, const char *abs_path)
 
 	rc = fs_get_mnt_point(&mp, abs_path, NULL);
 	if (rc < 0) {
-		LOG_ERR("mount point not found!!");
+		LOG_ERR("mount point not found for path: %s", abs_path);
 		return rc;
 	}
 
@@ -389,7 +402,8 @@ int fs_opendir(struct fs_dir_t *zdp, const char *abs_path)
 	if (rc < 0) {
 		zdp->mp = NULL;
 		zdp->dirp = NULL;
-		LOG_ERR("directory open error (%d)", rc);
+		LOG_ERR("directory open failed path=%s rc=%d (%s)", abs_path, rc,
+			fs_errno_str(rc));
 	}
 
 	return rc;
@@ -423,7 +437,8 @@ int fs_readdir(struct fs_dir_t *zdp, struct fs_dirent *entry)
 			}
 		}
 		if (rc < 0) {
-			LOG_ERR("directory read error (%d)", rc);
+			LOG_ERR("directory read error rc=%d (%s)", rc,
+				fs_errno_str(rc));
 		}
 
 		return rc;
@@ -488,7 +503,8 @@ int fs_closedir(struct fs_dir_t *zdp)
 
 	rc = zdp->mp->fs->closedir(zdp);
 	if (rc < 0) {
-		LOG_ERR("directory close error (%d)", rc);
+		LOG_ERR("directory close error rc=%d (%s)", rc,
+			fs_errno_str(rc));
 		return rc;
 	}
 
@@ -504,13 +520,14 @@ int fs_mkdir(const char *abs_path)
 	int rc = -EINVAL;
 
 	if ((abs_path == NULL) || (abs_path[0] != '/') || (abs_path[1] == '\0')) {
-		LOG_ERR("invalid directory name!!");
+		LOG_ERR("invalid directory name: %s",
+			abs_path ? abs_path : "(null)");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, abs_path, NULL);
 	if (rc < 0) {
-		LOG_ERR("mount point not found!!");
+		LOG_ERR("mount point not found for path: %s", abs_path);
 		return rc;
 	}
 
@@ -524,7 +541,8 @@ int fs_mkdir(const char *abs_path)
 
 	rc = mp->fs->mkdir(mp, abs_path);
 	if (rc < 0) {
-		LOG_ERR("failed to create directory (%d)", rc);
+		LOG_ERR("failed to create directory path=%s rc=%d (%s)", abs_path,
+			rc, fs_errno_str(rc));
 	}
 
 	return rc;
@@ -536,13 +554,14 @@ int fs_unlink(const char *abs_path)
 	int rc = -EINVAL;
 
 	if ((abs_path == NULL) || (abs_path[0] != '/') || (abs_path[1] == '\0')) {
-		LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file name: %s",
+			abs_path ? abs_path : "(null)");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, abs_path, NULL);
 	if (rc < 0) {
-		LOG_ERR("mount point not found!!");
+		LOG_ERR("mount point not found for path: %s", abs_path);
 		return rc;
 	}
 
@@ -556,7 +575,8 @@ int fs_unlink(const char *abs_path)
 
 	rc = mp->fs->unlink(mp, abs_path);
 	if (rc < 0) {
-		LOG_ERR("failed to unlink path (%d)", rc);
+		LOG_ERR("failed to unlink path=%s rc=%d (%s)", abs_path, rc,
+			fs_errno_str(rc));
 	}
 
 	return rc;
@@ -570,13 +590,14 @@ int fs_rename(const char *from, const char *to)
 
 	if ((from == NULL) || (from[0] != '/') || (from[1] == '\0') ||
 			(to == NULL) || (to[0] != '/') || (to[1] == '\0')) {
-		LOG_ERR("invalid file name!!");
+		LOG_ERR("invalid file name: from=%s to=%s",
+			from ? from : "(null)", to ? to : "(null)");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, from, &match_len);
 	if (rc < 0) {
-		LOG_ERR("mount point not found!!");
+		LOG_ERR("mount point not found for path: %s", from);
 		return rc;
 	}
 
@@ -586,7 +607,7 @@ int fs_rename(const char *from, const char *to)
 
 	/* Make sure both files are mounted on the same path */
 	if (strncmp(from, to, match_len) != 0) {
-		LOG_ERR("mount point not same!!");
+		LOG_ERR("mount point not same for rename from=%s to=%s", from, to);
 		return -EINVAL;
 	}
 
@@ -596,7 +617,8 @@ int fs_rename(const char *from, const char *to)
 
 	rc = mp->fs->rename(mp, from, to);
 	if (rc < 0) {
-		LOG_ERR("failed to rename file or dir (%d)", rc);
+		LOG_ERR("failed to rename from=%s to=%s rc=%d (%s)", from, to, rc,
+			fs_errno_str(rc));
 	}
 
 	return rc;
@@ -610,7 +632,8 @@ int fs_stat(const char *abs_path, struct fs_dirent *entry)
 	size_t path_len;
 
 	if ((abs_path == NULL) || (abs_path[0] != '/')) {
-		LOG_ERR("invalid file or dir name!!");
+		LOG_ERR("invalid file or dir name: %s",
+			abs_path ? abs_path : "(null)");
 		return -EINVAL;
 	}
 
@@ -626,7 +649,7 @@ int fs_stat(const char *abs_path, struct fs_dirent *entry)
 
 	rc = fs_get_mnt_point(&mp, abs_path, &mp_len);
 	if (rc < 0) {
-		LOG_ERR("mount point not found!!");
+		LOG_ERR("mount point not found for path: %s", abs_path);
 		return rc;
 	}
 
@@ -645,7 +668,8 @@ int fs_stat(const char *abs_path, struct fs_dirent *entry)
 	if (rc == -ENOENT) {
 		/* File doesn't exist, which is a valid stat response */
 	} else if (rc < 0) {
-		LOG_ERR("failed get file or dir stat (%d)", rc);
+		LOG_ERR("stat failed path=%s rc=%d (%s)", abs_path, rc,
+			fs_errno_str(rc));
 	}
 	return rc;
 }
@@ -656,13 +680,14 @@ int fs_statvfs(const char *abs_path, struct fs_statvfs *stat)
 	int rc;
 
 	if ((abs_path == NULL) || (abs_path[0] != '/') || (abs_path[1] == '\0')) {
-		LOG_ERR("invalid file or dir name!!");
+		LOG_ERR("invalid file or dir name: %s",
+			abs_path ? abs_path : "(null)");
 		return -EINVAL;
 	}
 
 	rc = fs_get_mnt_point(&mp, abs_path, NULL);
 	if (rc < 0) {
-		LOG_ERR("mount point not found!!");
+		LOG_ERR("mount point not found for path: %s", abs_path);
 		return rc;
 	}
 
@@ -672,7 +697,8 @@ int fs_statvfs(const char *abs_path, struct fs_statvfs *stat)
 
 	rc = mp->fs->statvfs(mp, abs_path, stat);
 	if (rc < 0) {
-		LOG_ERR("failed get file or dir stat (%d)", rc);
+		LOG_ERR("statvfs failed path=%s rc=%d (%s)", abs_path, rc,
+			fs_errno_str(rc));
 	}
 
 	return rc;
@@ -690,7 +716,8 @@ int fs_gc(struct fs_mount_t *mp)
 
 	rc = mp->fs->gc(mp);
 	if (rc < 0) {
-		LOG_ERR("failed to run garbage collection (%d)", rc);
+		LOG_ERR("failed to run garbage collection rc=%d (%s)", rc,
+			fs_errno_str(rc));
 	}
 
 	return rc;
@@ -770,7 +797,8 @@ int fs_mount(struct fs_mount_t *mp)
 
 	rc = fs->mount(mp);
 	if (rc < 0) {
-		LOG_ERR("fs mount error (%d)", rc);
+		LOG_ERR("fs mount error at %s rc=%d (%s)", mp->mnt_point, rc,
+			fs_errno_str(rc));
 		goto mount_err;
 	}
 
@@ -812,7 +840,8 @@ int fs_mkfs(int fs_type, uintptr_t dev_id, void *cfg, int flags)
 
 	rc = fs->mkfs(dev_id, cfg, flags);
 	if (rc < 0) {
-		LOG_ERR("mkfs error (%d)", rc);
+		LOG_ERR("mkfs error fs_type=%d rc=%d (%s)", fs_type, rc,
+			fs_errno_str(rc));
 		goto mount_err;
 	}
 
@@ -846,7 +875,8 @@ int fs_unmount(struct fs_mount_t *mp)
 
 	rc = mp->fs->unmount(mp);
 	if (rc < 0) {
-		LOG_ERR("fs unmount error (%d)", rc);
+		LOG_ERR("fs unmount error at %s rc=%d (%s)", mp->mnt_point, rc,
+			fs_errno_str(rc));
 		goto unmount_err;
 	}
 
