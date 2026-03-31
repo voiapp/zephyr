@@ -437,6 +437,8 @@ static int handle_event(struct lwm2m_swmgmt_data *instance, uint8_t event)
 	case UPD_STATE_DELIVERED:
 		switch (event) {
 		case EVENT_INSTALL:
+			/* OMA: result must not reflect a prior attempt once a new install starts. */
+			set_sw_update_result(instance, UPD_RES_INITIAL);
 			if (instance->next_package_is_upgrade) {
 				ret = instance->upgrade_package_cb(instance->obj_inst_id);
 			}
