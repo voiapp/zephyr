@@ -22,6 +22,25 @@
 
 #include "clock_stm32_ll_common.h"
 
+#if IS_ENABLED(CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING)
+/* AT32F435 register pokes the STM32 LL doesn't cover.
+ *
+ * The Artery FLASH macro is rated for ~100 MHz; with the reset-default
+ * divider (/2) a 240 MHz SYSCLK over-clocks it the instant SYSCLK switches
+ * to the new PLL output, which is what we hit during a chain-load from a
+ * 120 MHz MCUboot into a 240 MHz application. The flash clock divider and
+ * the CRM "auto step" SYSCLK-stepping bit are programmed via raw register
+ * writes below — the STM32 LL headers don't model these registers.
+ */
+#define AT32F435_FLASH_DIVR  (*(volatile uint32_t *)0x40023C60UL) /* FLASH offset 0x60 */
+#define AT32F435_CRM_MISC2   (*(volatile uint32_t *)0x400238A4UL) /* CRM   offset 0xA4 */
+#define AT32F435_FLASH_DIVR_FDIV_MASK     (0x3U << 0)
+#define AT32F435_FLASH_DIVR_FDIV_DIV2     (0x0U << 0)
+#define AT32F435_FLASH_DIVR_FDIV_DIV3     (0x1U << 0)
+#define AT32F435_CRM_MISC2_AUTO_STEP_MASK (0x3U << 4)
+#define AT32F435_CRM_MISC2_AUTO_STEP_EN   (0x3U << 4)
+#endif /* CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING */
+
 /* Macros to fill up prescaler values */
 #define hsi_divider(v) CONCAT(LL_RCC_HSI_DIV_, v)
 
@@ -1139,6 +1158,39 @@ int stm32_clock_control_init(const struct device *dev)
 	config_enable_default_clocks();
 	config_regulator_voltage(CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC);
 
+#if IS_ENABLED(CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING)
+	/* AT32F435 has no FLASH_ACR; flash wait states are programmed by
+	 * dividing the flash clock from SYSCLK via FLASH->divr.fdiv. Set the
+	 * divider BEFORE any PLL/SYSCLK reconfiguration so that whatever
+	 * SYSCLK we land on during the transition (current MCUboot freq,
+	 * HSI fallback during PLL reprogramming, or the new target) keeps
+	 * the flash clock inside its ~100 MHz spec. DIV_3 covers every
+	 * frequency up to 288 MHz (288/3 = 96 MHz flash).
+	 */
+	{
+		uint32_t divr = AT32F435_FLASH_DIVR & ~AT32F435_FLASH_DIVR_FDIV_MASK;
+
+		if (CONFIG_SYS_CLOCK_HW_CYCLES_PER_SEC > MHZ(120)) {
+			divr |= AT32F435_FLASH_DIVR_FDIV_DIV3;
+		} else {
+			divr |= AT32F435_FLASH_DIVR_FDIV_DIV2;
+		}
+		AT32F435_FLASH_DIVR = divr;
+	}
+
+	/* AT32F435: enable CRM auto-step. When chain-loading from a 120 MHz
+	 * bootloader into a 240 MHz application the SYSCLK source has to
+	 * move between very different frequencies; auto-step makes the CRM
+	 * insert intermediate divider stages instead of jumping straight to
+	 * the new clock.
+	 */
+	{
+		uint32_t m2 = AT32F435_CRM_MISC2 & ~AT32F435_CRM_MISC2_AUTO_STEP_MASK;
+
+		AT32F435_CRM_MISC2 = m2 | AT32F435_CRM_MISC2_AUTO_STEP_EN;
+	}
+#endif /* CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING */
+
 #if defined(FLASH_ACR_LATENCY)
 	uint32_t old_flash_freq;
 	uint32_t new_flash_freq;
@@ -1228,6 +1280,11 @@ int stm32_clock_control_init(const struct device *dev)
 	} else {
 		LL_RCC_SetTIMPrescaler(LL_RCC_TIM_PRESCALER_TWICE);
 	}
+#endif
+
+#if IS_ENABLED(CONFIG_CLOCK_STM32_AT32F435_PLL_FR_ENCODING)
+	/* SYSCLK has settled at the target frequency; disable auto-step. */
+	AT32F435_CRM_MISC2 &= ~AT32F435_CRM_MISC2_AUTO_STEP_MASK;
 #endif
 
 	return 0;
