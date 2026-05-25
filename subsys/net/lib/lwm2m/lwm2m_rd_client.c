@@ -1344,57 +1344,18 @@ static void sm_do_network_error(void)
 	client.retry_delay = 1 << client.retries;
 	client.retries++;
 
-	/* Stop retrying and try fallback */
+	/* Voi: never park the server or stop the engine. Clear any disable
+	 * timestamp that another callsite may have set, notify the app, reset
+	 * the counter and fall through to the normal retry path. */
 	if (client.retries > CONFIG_LWM2M_RD_CLIENT_MAX_RETRIES) {
-		LOG_ERR("Network error, max retries reached (%d)", client.retries);
-
-		/* Disable current server for a period so lwm2m_server_select() does not pick it */
-		if (client.ctx->srv_obj_inst > -1) {
-			lwm2m_server_disable(client.ctx->srv_obj_inst, DISABLE_TIMEOUT);
+		LOG_WRN("Network error, max retries reached (%d) — retrying",
+			client.retries);
+		lwm2m_server_reset_timestamps();
+		if (client.ctx->event_cb) {
+			client.ctx->event_cb(client.ctx,
+					     LWM2M_RD_CLIENT_EVENT_NETWORK_ERROR);
 		}
-
-		/* Are we in bootstrap? Try if we can fallback to some other BS server */
-		if (client.ctx->bootstrap_mode &&
-		    IS_ENABLED(CONFIG_LWM2M_RD_CLIENT_SUPPORT_BOOTSTRAP)) {
-			LOG_DBG("In bootstrap, try fallback srv");
-			/* Do we have any other bootstrap server to back off to? */
-			if (sm_next_bootstrap_inst(&client.ctx->sec_obj_inst) < 0) {
-				/* No, we are out of options, stop engine */
-				goto stop_engine;
-			}
-			set_sm_state(ENGINE_INIT);
-			return;
-		}
-
-		/* Try if there are other server to fall back to,
-		 * Only allow fallback to higher priority server (lower value, or lower id)
-		 * if we have successfully registered before.
-		 * This should block us from looping the same list again.
-		 * Instead we should fallback to bootstrap.
-		 */
-		uint16_t srv;
-
-		if (lwm2m_server_select(&srv)) {
-			uint8_t p1, p2;
-
-			p1 = lwm2m_server_get_prio(client.ctx->srv_obj_inst);
-			p2 = lwm2m_server_get_prio(srv);
-			if (p1 < p2 || client.last_update != 0) {
-				set_sm_state(ENGINE_INIT);
-				return;
-			}
-		}
-
-		/* If we have been disabled by some server, don't fall back to bootstrap */
-		if (client.server_disabled) {
-			set_sm_state(ENGINE_SERVER_DISABLED);
-			return;
-		}
-
-		if (fallback_to_bootstrap()) {
-			return;
-		}
-		goto stop_engine;
+		client.retries = 0;
 	}
 
 	/* Retry bootstrap */
@@ -1432,21 +1393,6 @@ static void sm_do_network_error(void)
 		return;
 	}
 	set_sm_state(ENGINE_UPDATE_REGISTRATION);
-	return;
-
-stop_engine:
-
-	/* We are out of options, stop engine */
-	lwm2m_engine_stop(client.ctx);
-	if (client.ctx->event_cb) {
-		if (client.ctx->bootstrap_mode) {
-			client.ctx->event_cb(client.ctx,
-					     LWM2M_RD_CLIENT_EVENT_BOOTSTRAP_REG_FAILURE);
-		} else {
-			client.ctx->event_cb(client.ctx, LWM2M_RD_CLIENT_EVENT_NETWORK_ERROR);
-		}
-	}
-	set_sm_state(ENGINE_IDLE);
 }
 
 static void lwm2m_rd_client_service(struct k_work *work)
