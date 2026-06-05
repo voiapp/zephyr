@@ -1424,6 +1424,11 @@ static int spi_stm32_configure(const struct device *dev,
 		ll_spi_swap_mosi_miso(spi);
 	}
 #endif
+	if (cfg->alternate_function_gpio_control) {
+		LL_SPI_EnableGPIOControl(cfg->spi);
+	} else {
+		LL_SPI_DisableGPIOControl(cfg->spi);
+	}
 
 	if (SPI_MODE_GET(config->operation) & SPI_MODE_CPOL) {
 		LL_SPI_SetClockPolarity(spi, STM32_SPI_CLOCK_POLARITY_HIGH);
@@ -2533,6 +2538,7 @@ static int spi_stm32_init(const struct device *dev)
 			DT_INST_STRING_UPPER_TOKEN(id, st_spi_data_width)),	\
 		.fifo_enabled = SPI_FIFO_ENABLED(id),				\
 		.ioswp = DT_INST_PROP(id, ioswp),				\
+		.alternate_function_gpio_control = DT_INST_PROP(id, alternate_function_gpio_control), \
 		STM32_SPI_IRQ_HANDLER_FUNC(id)					\
 		IF_ENABLED(DT_HAS_COMPAT_STATUS_OKAY(st_stm32_spi_subghz),	\
 			   (.use_subghzspi_nss =				\

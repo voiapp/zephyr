@@ -39,6 +39,7 @@ struct spi_stm32_config {
 #endif
 	bool fifo_enabled: 1;
 	bool ioswp: 1;
+	bool alternate_function_gpio_control: 1;
 	bool soft_nss: 1;
 #if DT_HAS_COMPAT_STATUS_OKAY(st_stm32_spi_subghz)
 	bool use_subghzspi_nss: 1;
