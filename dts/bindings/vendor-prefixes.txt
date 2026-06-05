@@ -278,6 +278,7 @@ globalscale	Globalscale Technologies, Inc.
 globaltop	GlobalTop Technology, Inc.
 gmt	Global Mixed-mode Technology, Inc.
 gooddisplay	Dalian Good Display Co., Ltd.
+goldeneye	Goldeneye by Voi Technology
 goodix	Shenzhen Huiding Technology Co., Ltd.
 google	Google, Inc.
 greeled	GreeLed Electronic Ltd.
@@ -746,6 +747,7 @@ vivante	Vivante Corporation
 vnd	A stand-in for a real vendor which can be used in examples and tests
 vngiotlab	VNGIoTLab
 vocore	VoCore Studio
+voi	Voi Technology
 voipac	Voipac Technologies s.r.o.
 vot	Vision Optical Technology Co., Ltd.
 vxt	VXT Ltd
