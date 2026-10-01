@@ -1480,20 +1480,6 @@ static void uart_stm32_isr(const struct device *dev)
 	}
 #endif /* CONFIG_UART_INTERRUPT_DRIVEN */
 
-	if (data->dma_tx.dma_dev == NULL && data->dma_tx.buffer_length != 0 &&
-	    LL_USART_IsEnabledIT_TXE(usart) && LL_USART_IsActiveFlag_TXE(usart)) {
-		/* Software TX (no TX DMA channel): one byte per TXE */
-		if (data->dma_tx.counter < data->dma_tx.buffer_length) {
-			LL_USART_TransmitData8(usart,
-					       data->dma_tx.buffer[data->dma_tx.counter++]);
-		}
-		if (data->dma_tx.counter >= data->dma_tx.buffer_length) {
-			LL_USART_DisableIT_TXE(usart);
-			LL_USART_ClearFlag_TC(usart);
-			LL_USART_EnableIT_TC(usart);
-		}
-	}
-
 	if (LL_USART_IsEnabledIT_IDLE(usart) && LL_USART_IsActiveFlag_IDLE(usart)) {
 
 		LL_USART_ClearFlag_IDLE(usart);
@@ -1788,28 +1774,7 @@ static int uart_stm32_async_tx(const struct device *dev,
 				      : 1;
 
 	if (data->dma_tx.dma_dev == NULL) {
-		/* No TX DMA channel: send from the TXE interrupt, and raise UART_TX_DONE
-		 * from the TC interrupt once the last byte has left the shifter.
-		 * The timeout is not used on this path.
-		 */
-		if (data->dma_tx.buffer_length != 0) {
-			return -EBUSY;
-		}
-
-		key = irq_lock();
-		data->dma_tx.buffer = (uint8_t *)tx_data;
-		data->dma_tx.buffer_length = buf_size;
-		data->dma_tx.counter = 0;
-		data->dma_tx.timeout = timeout;
-#ifdef CONFIG_PM
-		data->tx_poll_stream_on = false;
-		data->tx_int_stream_on = true;
-		uart_stm32_pm_policy_state_lock_get_unconditional();
-#endif
-		LL_USART_EnableIT_TXE(usart);
-		irq_unlock(key);
-
-		return 0;
+		return -ENODEV;
 	}
 
 	if (data->dma_tx.buffer_length != 0) {
@@ -2042,21 +2007,6 @@ static int uart_stm32_async_tx_abort(const struct device *dev)
 
 	if (tx_buffer_length == 0) {
 		return -EFAULT;
-	}
-
-	if (data->dma_tx.dma_dev == NULL) {
-		/* Software TX (no TX DMA channel) */
-		const struct uart_stm32_config *cfg = dev->config;
-		unsigned int key = irq_lock();
-
-		LL_USART_DisableIT_TXE(cfg->usart);
-		LL_USART_DisableIT_TC(cfg->usart);
-		async_evt_tx_abort(data);
-#ifdef CONFIG_PM
-		uart_stm32_pm_policy_state_lock_put_unconditional();
-#endif
-		irq_unlock(key);
-		return 0;
 	}
 
 	(void)k_work_cancel_delayable(&data->dma_tx.timeout_work);
