@@ -40,6 +40,9 @@ LOG_MODULE_REGISTER(modem_cellular, CONFIG_MODEM_LOG_LEVEL);
 
 #define MODEM_CELLULAR_RESERVED_DLCIS        (2)
 #define MODEM_CELLULAR_MAX_APN_CMDS          (2)
+#if defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+#define MODEM_CELLULAR_MAX_CV_APN_CMDS       (5)
+#endif
 #define MODEM_CELLULAR_APN_BUF_SIZE          (64)
 
 /* Magic constants */
@@ -160,6 +163,21 @@ struct modem_cellular_data {
 	struct modem_chat_script_chat apn_chats[MODEM_CELLULAR_MAX_APN_CMDS];
 	struct modem_chat_script apn_script;
 	char apn_buf[MODEM_CELLULAR_MAX_APN_CMDS][MODEM_CELLULAR_APN_BUF_SIZE];
+
+#if defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+	/* Runtime switch of PDP context 2 (CV), see modem_cellular_goldeneye_set_cv_apn() */
+	struct k_sem cv_apn_busy;	/* serialises CV context changes and recovery */
+	struct k_sem cv_apn_done;
+	struct k_mutex cv_addr_lock;	/* guards pdp_addr_2 and cv_pdp_prev */
+	int cv_apn_result;
+	bool cv_apn_async;		/* set while a recovery run is active */
+	bool cv_ctx_down;		/* periodic check saw PDP context 2 inactive */
+	char cv_pdp_prev[MODEM_CELLULAR_DATA_PDP_ADDR_LEN];
+	char cv_apn[MODEM_CELLULAR_DATA_APN_LEN];
+	struct modem_chat_script_chat cv_apn_chats[MODEM_CELLULAR_MAX_CV_APN_CMDS];
+	struct modem_chat_script cv_apn_script;
+	char cv_apn_req[MODEM_CELLULAR_MAX_CV_APN_CMDS][MODEM_CELLULAR_APN_BUF_SIZE];
+#endif
 
 	/* PPP */
 	struct modem_ppp *ppp;
@@ -1503,6 +1521,11 @@ static int modem_cellular_on_carrier_on_state_enter(struct modem_cellular_data *
 	return 0;
 }
 
+#if defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+static void modem_cellular_cv_addr_check(struct modem_cellular_data *data);
+static void modem_cellular_cv_recover(struct modem_cellular_data *data);
+#endif
+
 static void modem_cellular_carrier_on_event_handler(struct modem_cellular_data *data,
 						    enum modem_cellular_event evt)
 {
@@ -1515,6 +1538,17 @@ static void modem_cellular_carrier_on_event_handler(struct modem_cellular_data *
 	case MODEM_CELLULAR_EVENT_SCRIPT_FAILED:
 		result.success = evt == MODEM_CELLULAR_EVENT_SCRIPT_SUCCESS;
 
+#if defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+		/* Periodic run read the CV address (AT+CGPADDR): report it if it changed */
+		if (evt == MODEM_CELLULAR_EVENT_SCRIPT_SUCCESS) {
+			modem_cellular_cv_addr_check(data);
+		}
+
+		/* Periodic check found context 2 down: re-activate it now the chat is idle */
+		if (data->cv_ctx_down) {
+			modem_cellular_cv_recover(data);
+		}
+#endif
 		modem_cellular_start_timer(data, MODEM_CELLULAR_PERIODIC_SCRIPT_TIMEOUT);
 		modem_cellular_emit_event(data, CELLULAR_EVENT_MODEM_COMMS_CHECK_RESULT, &result);
 		break;
@@ -1522,8 +1556,8 @@ static void modem_cellular_carrier_on_event_handler(struct modem_cellular_data *
 	case MODEM_CELLULAR_EVENT_TIMEOUT:
 		if (modem_chat_run_script_async(&data->chat, config->periodic_chat_script) < 0) {
 			/*
-			 * Chat busy (e.g. a script is running): no result event will arrive,
-			 * so re-arm the periodic timer here.
+			 * Chat busy (e.g. CV APN switch running): no result event will
+			 * arrive, so re-arm the periodic timer here.
 			 */
 			modem_cellular_start_timer(data, MODEM_CELLULAR_PERIODIC_SCRIPT_TIMEOUT);
 		}
@@ -2151,7 +2185,13 @@ static int modem_cellular_get_modem_info(const struct device *dev,
 		strncpy(info, &data->pdp_addr_1[0], MIN(size, sizeof(data->pdp_addr_1)));
 		break;
 	case CELLULAR_MODEM_INFO_PDP_ADDR_2:
+#if defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+		k_mutex_lock(&data->cv_addr_lock, K_FOREVER);
+#endif
 		strncpy(info, &data->pdp_addr_2[0], MIN(size, sizeof(data->pdp_addr_2)));
+#if defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+		k_mutex_unlock(&data->cv_addr_lock);
+#endif
 		break;
 	default:
 		ret = -ENODATA;
@@ -2323,6 +2363,15 @@ static void modem_cellular_init_apn(struct modem_cellular_data *data)
 	modem_chat_script_set_timeout(&data->apn_script, 1);
 	modem_chat_script_set_callback(&data->apn_script,
 				       modem_cellular_chat_callback_handler);
+
+#if defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+	k_sem_init(&data->cv_apn_busy, 1, 1);
+	k_sem_init(&data->cv_apn_done, 0, 1);
+	k_mutex_init(&data->cv_addr_lock);
+	strncpy(data->cv_apn, CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_CV_APN,
+		sizeof(data->cv_apn) - 1);
+	data->cv_apn[sizeof(data->cv_apn) - 1] = '\0';
+#endif
 }
 
 static int modem_cellular_init(const struct device *dev)
@@ -2597,8 +2646,12 @@ static void modem_cellular_chat_on_cgpaddr(struct modem_chat *chat, char **argv,
 		data->pdp_addr_1[sizeof(data->pdp_addr_1) - 1] = '\0';
 		break;
 	case 2:
-		strncpy(data->pdp_addr_2, argv[2], sizeof(data->pdp_addr_2) - 1);
+		k_mutex_lock(&data->cv_addr_lock, K_FOREVER);
+		strncpy(data->pdp_addr_2,
+			(strcmp(argv[2], "0.0.0.0") == 0) ? "" : argv[2],
+			sizeof(data->pdp_addr_2) - 1);
 		data->pdp_addr_2[sizeof(data->pdp_addr_2) - 1] = '\0';
+		k_mutex_unlock(&data->cv_addr_lock);
 		break;
 	default:
 		break;
@@ -2684,13 +2737,264 @@ MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_dial_chat_script_cmds,
 MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_dial_chat_script, quectel_eg800q_dial_chat_script_cmds,
 			 dial_abort_matches, modem_cellular_chat_callback_handler, 10);
 
+/*
+ * Periodic check of PDP context 2 state. Each "+CGACT: <cid>,<state>" line
+ * fires the callback (separators split cid and state, CR ends the state).
+ */
+static void modem_cellular_chat_on_cgact(struct modem_chat *chat, char **argv, uint16_t argc,
+					 void *user_data)
+{
+	struct modem_cellular_data *data = (struct modem_cellular_data *)user_data;
+
+	if (argc != 3) {
+		return;
+	}
+
+	if (atoi(argv[1]) == 2) {
+		data->cv_ctx_down = (atoi(argv[2]) == 0);
+		if (data->cv_ctx_down) {
+			/* An inactive context has no address: report the loss */
+			k_mutex_lock(&data->cv_addr_lock, K_FOREVER);
+			data->pdp_addr_2[0] = '\0';
+			k_mutex_unlock(&data->cv_addr_lock);
+		}
+	}
+}
+
+MODEM_CHAT_MATCHES_DEFINE(cgact_matches,
+			  MODEM_CHAT_MATCH_INITIALIZER("+CGACT: ", ",\r",
+						       modem_cellular_chat_on_cgact, false,
+						       true),
+			  MODEM_CHAT_MATCH("OK", "", NULL),
+			  MODEM_CHAT_MATCH("ERROR", "", NULL));
+
 MODEM_CHAT_SCRIPT_CMDS_DEFINE(quectel_eg800q_periodic_chat_script_cmds,
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CEREG?", ok_match),
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGACT?", cgact_matches),
+			      MODEM_CHAT_SCRIPT_CMD_RESP_MULT("AT+CGPADDR", cgpaddr_matches),
 			      MODEM_CHAT_SCRIPT_CMD_RESP("AT+CSQ", csq_match));
 
 MODEM_CHAT_SCRIPT_DEFINE(quectel_eg800q_periodic_chat_script,
 			 quectel_eg800q_periodic_chat_script_cmds, abort_matches,
 			 modem_cellular_chat_callback_handler, 4);
+
+/*
+ * Report a PDP context 2 address change to the application. Called after a
+ * successful run; compares against the address saved before the run.
+ */
+static void modem_cellular_cv_addr_check(struct modem_cellular_data *data)
+{
+	struct cellular_evt_modem_info evt = {
+		.field = CELLULAR_MODEM_INFO_PDP_ADDR_2,
+	};
+
+	bool changed;
+
+	k_mutex_lock(&data->cv_addr_lock, K_FOREVER);
+	changed = strcmp(data->cv_pdp_prev, data->pdp_addr_2) != 0;
+	if (changed) {
+		strncpy(data->cv_pdp_prev, data->pdp_addr_2, sizeof(data->cv_pdp_prev) - 1);
+		data->cv_pdp_prev[sizeof(data->cv_pdp_prev) - 1] = '\0';
+	}
+	k_mutex_unlock(&data->cv_addr_lock);
+
+	if (changed) {
+		modem_cellular_emit_event(data, CELLULAR_EVENT_MODEM_INFO_CHANGED, &evt);
+	}
+}
+
+/* Remember the current address as the last reported one and clear it for a new run */
+static void modem_cellular_cv_addr_clear(struct modem_cellular_data *data)
+{
+	k_mutex_lock(&data->cv_addr_lock, K_FOREVER);
+	strncpy(data->cv_pdp_prev, data->pdp_addr_2, sizeof(data->cv_pdp_prev) - 1);
+	data->cv_pdp_prev[sizeof(data->cv_pdp_prev) - 1] = '\0';
+	data->pdp_addr_2[0] = '\0';
+	k_mutex_unlock(&data->cv_addr_lock);
+}
+
+/*
+ * Runtime switch of PDP context 2 (CV over USB ECM) without a modem reboot.
+ *
+ * Only valid in CARRIER_ON: the chat is attached and PPP on context 1 stays up.
+ * The sequence mirrors the dial script: drop CID 2, redefine it, reactivate it,
+ * re-attach the USB netcard, then re-read the address into pdp_addr_2.
+ *
+ * The script has its own callback, so its result never reaches the state
+ * machine or the periodic comms check.
+ */
+static void modem_cellular_cv_apn_chat_callback(struct modem_chat *chat,
+						enum modem_chat_script_result result,
+						void *user_data)
+{
+	struct modem_cellular_data *data = (struct modem_cellular_data *)user_data;
+	int ret = (result == MODEM_CHAT_SCRIPT_RESULT_SUCCESS) ? 0 : -EIO;
+
+	if (data->cv_apn_async) {
+		/* Recovery run: nobody waits on it, so report the change and release */
+		data->cv_apn_async = false;
+		if (ret == 0) {
+			modem_cellular_cv_addr_check(data);
+		}
+		k_sem_give(&data->cv_apn_busy);
+		return;
+	}
+
+	data->cv_apn_result = ret;
+	k_sem_give(&data->cv_apn_done);
+}
+
+static void modem_cellular_cv_apn_add_chat(struct modem_cellular_data *data, size_t idx,
+					   const char *request,
+					   const struct modem_chat_match *matches,
+					   size_t num_matches)
+{
+	modem_chat_script_chat_init(&data->cv_apn_chats[idx]);
+	modem_chat_script_chat_set_request(&data->cv_apn_chats[idx], request);
+	modem_chat_script_chat_set_response_matches(&data->cv_apn_chats[idx], matches,
+						    num_matches);
+}
+
+static void modem_cellular_build_cv_apn_script(struct modem_cellular_data *data,
+					       const char *apn)
+{
+	size_t steps = 0;
+
+	/* Drop CID 2; ERROR is allowed when it is already inactive */
+	modem_cellular_cv_apn_add_chat(data, steps++, "AT+CGACT=0,2",
+				       allow_match, ARRAY_SIZE(allow_match));
+
+	/* Redefine CID 2 with the new APN */
+	snprintk(data->cv_apn_req[steps], MODEM_CELLULAR_APN_BUF_SIZE,
+		 "AT+CGDCONT=2,\"IP\",\"%s\"", apn);
+	modem_cellular_cv_apn_add_chat(data, steps, data->cv_apn_req[steps], &ok_match, 1);
+	steps++;
+
+	/* Reactivate CID 2 */
+	modem_cellular_cv_apn_add_chat(data, steps, "AT+CGACT=1,2", &ok_match, 1);
+	steps++;
+
+	/* Re-attach the USB netcard on CID 2, same as the dial script */
+	modem_cellular_cv_apn_add_chat(data, steps, "AT+QNETDEVCTL=1,2,1",
+				       allow_match, ARRAY_SIZE(allow_match));
+	steps++;
+
+	/* Read back addresses so pdp_addr_2 is refreshed */
+	modem_cellular_cv_apn_add_chat(data, steps, "AT+CGPADDR",
+				       cgpaddr_matches, ARRAY_SIZE(cgpaddr_matches));
+	steps++;
+
+	modem_chat_script_init(&data->cv_apn_script);
+	modem_chat_script_set_name(&data->cv_apn_script, "modem_cellular_cv_apn");
+	modem_chat_script_set_timeout(&data->cv_apn_script, 10);
+	modem_chat_script_set_callback(&data->cv_apn_script,
+				       modem_cellular_cv_apn_chat_callback);
+	modem_chat_script_set_script_chats(&data->cv_apn_script, data->cv_apn_chats, steps);
+}
+
+/*
+ * Re-activate PDP context 2 after the periodic check found it inactive.
+ * Runs asynchronously from the carrier-on handler; the result is reported
+ * through the callback. If the chat or the busy lock is taken, the flag stays
+ * set and the next periodic check retries.
+ */
+static void modem_cellular_cv_recover(struct modem_cellular_data *data)
+{
+	if ((data->cv_apn[0] == '\0') || (k_sem_take(&data->cv_apn_busy, K_NO_WAIT) != 0)) {
+		return;
+	}
+
+	modem_cellular_build_cv_apn_script(data, data->cv_apn);
+
+	modem_cellular_cv_addr_clear(data);
+
+	data->cv_apn_async = true;
+	if (modem_chat_run_script_async(&data->chat, &data->cv_apn_script) < 0) {
+		data->cv_apn_async = false;
+		k_sem_give(&data->cv_apn_busy);
+		return;
+	}
+
+	data->cv_ctx_down = false;
+}
+
+int modem_cellular_goldeneye_set_cv_apn(const struct device *dev, const char *apn)
+{
+	struct modem_cellular_data *data = (struct modem_cellular_data *)dev->data;
+	int ret;
+
+	if ((apn == NULL) || (apn[0] == '\0') || (strlen(apn) >= MODEM_CELLULAR_DATA_APN_LEN)) {
+		return -EINVAL;
+	}
+
+	/* The APN goes inside quotes in AT+CGDCONT: reject quotes, backslash and control chars */
+	for (const char *c = apn; *c != '\0'; c++) {
+		if (((uint8_t)*c < 0x20) || ((uint8_t)*c > 0x7e) || (*c == '"') || (*c == '\\')) {
+			return -EINVAL;
+		}
+	}
+
+	if (k_sem_take(&data->cv_apn_busy, K_SECONDS(40)) != 0) {
+		return -EBUSY;
+	}
+
+	/*
+	 * The state is written by the delegate thread. Reading it here is enough
+	 * for a shell command; a suspend during the script makes the script fail.
+	 */
+	if (data->state != MODEM_CELLULAR_STATE_CARRIER_ON) {
+		ret = -ENOTCONN;
+		goto out;
+	}
+
+	if (!data->cv_ctx_down && (strcmp(apn, data->cv_apn) == 0)) {
+		ret = -EALREADY;
+		goto out;
+	}
+
+	modem_cellular_build_cv_apn_script(data, apn);
+
+	/*
+	 * Save the old address for the change check, then clear it so a failed
+	 * run cannot report a stale one.
+	 */
+	modem_cellular_cv_addr_clear(data);
+	k_sem_reset(&data->cv_apn_done);
+
+	/* The periodic script may hold the chat for a moment; retry briefly */
+	for (int i = 0; i < 50; i++) {
+		ret = modem_chat_run_script_async(&data->chat, &data->cv_apn_script);
+		if (ret != -EBUSY) {
+			break;
+		}
+		k_sleep(K_MSEC(100));
+	}
+
+	if (ret == 0) {
+		ret = k_sem_take(&data->cv_apn_done, K_SECONDS(30));
+		if (ret == 0) {
+			ret = data->cv_apn_result;
+		} else {
+			ret = -ETIMEDOUT;
+		}
+	}
+
+	if (ret == 0) {
+		strncpy(data->cv_apn, apn, sizeof(data->cv_apn) - 1);
+		data->cv_apn[sizeof(data->cv_apn) - 1] = '\0';
+		data->cv_ctx_down = false;
+		modem_cellular_cv_addr_check(data);
+	} else {
+		/* Context 2 may be down. Keep cv_apn (last APN that worked) as the recovery
+		 * target; the periodic check re-activates context 2 with it.
+		 */
+		data->cv_ctx_down = true;
+	}
+
+out:
+	k_sem_give(&data->cv_apn_busy);
+	return ret;
+}
 
 #else /* !CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT */
 
