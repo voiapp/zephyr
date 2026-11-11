@@ -1520,7 +1520,13 @@ static void modem_cellular_carrier_on_event_handler(struct modem_cellular_data *
 		break;
 
 	case MODEM_CELLULAR_EVENT_TIMEOUT:
-		modem_chat_run_script_async(&data->chat, config->periodic_chat_script);
+		if (modem_chat_run_script_async(&data->chat, config->periodic_chat_script) < 0) {
+			/*
+			 * Chat busy (e.g. a script is running): no result event will arrive,
+			 * so re-arm the periodic timer here.
+			 */
+			modem_cellular_start_timer(data, MODEM_CELLULAR_PERIODIC_SCRIPT_TIMEOUT);
+		}
 		break;
 
 	case MODEM_CELLULAR_EVENT_DEREGISTERED:
