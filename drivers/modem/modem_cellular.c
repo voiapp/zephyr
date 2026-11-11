@@ -1514,9 +1514,18 @@ static int modem_cellular_on_await_registered_state_leave(struct modem_cellular_
 	return 0;
 }
 
+#if defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+static void modem_cellular_cv_addr_check(struct modem_cellular_data *data);
+#endif
+
 static int modem_cellular_on_carrier_on_state_enter(struct modem_cellular_data *data)
 {
 	net_if_carrier_on(modem_ppp_get_iface(data->ppp));
+#if defined(CONFIG_MODEM_CELLULAR_QUECTEL_EG800Q_GOLDENEYE_SCRIPT)
+	/* A (re)dial ran AT+CGACT=1,2 and AT+CGPADDR: report a new CV address now,
+	 * instead of waiting for the next periodic check */
+	modem_cellular_cv_addr_check(data);
+#endif
 	modem_cellular_start_timer(data, MODEM_CELLULAR_PERIODIC_SCRIPT_TIMEOUT);
 	return 0;
 }
